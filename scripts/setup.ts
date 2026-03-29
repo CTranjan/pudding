@@ -61,8 +61,16 @@ function loginViaProxy(): Promise<CookieData> {
         proxyLogLevel: 'warn',
       },
       (err: Error | null, result: Record<string, unknown>) => {
+        // The library calls this callback TWICE in proxy mode:
+        // 1st: with an "error" that says "Please open browser..." (this is a prompt, not a real error)
+        // 2nd: with the actual cookie data after successful login
         if (err) {
-          reject(new Error(`Login failed: ${err.message || err}`));
+          const msg = String(err.message || err);
+          if (msg.includes('Please open') || msg.includes('localhost')) {
+            // This is the proxy startup prompt — ignore it, keep waiting
+            return;
+          }
+          reject(new Error(`Login failed: ${msg}`));
           return;
         }
         if (!result) {
