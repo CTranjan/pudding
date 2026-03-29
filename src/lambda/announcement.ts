@@ -1,6 +1,6 @@
 import { AnnouncementEvent } from '../lib/types';
-import { getCookieData, saveCookieData, getDeviceSerial } from '../lib/ssm';
-import { initAlexa, sendVoiceCommand, getUpdatedCookieData } from '../lib/alexa-client';
+import { getCookieString, saveCookieString, getDeviceSerial } from '../lib/ssm';
+import { initAlexa, sendVoiceCommand } from '../lib/alexa-client';
 
 export const handler = async (event: AnnouncementEvent): Promise<void> => {
   const { message, commandType, reminderId } = event;
@@ -12,10 +12,10 @@ export const handler = async (event: AnnouncementEvent): Promise<void> => {
     messageLength: message.length,
   }));
 
-  const cookieData = await getCookieData();
+  const cookieString = await getCookieString();
   const deviceSerial = await getDeviceSerial();
 
-  let alexa = await initAlexa(cookieData);
+  const alexa = await initAlexa(cookieString);
 
   try {
     await sendVoiceCommand(alexa, deviceSerial, message, commandType);
@@ -40,9 +40,9 @@ export const handler = async (event: AnnouncementEvent): Promise<void> => {
         error: errorMessage,
       }));
 
-      // Attempt to reinitialize — alexa-remote2 may auto-refresh the cookie during init
-      alexa = await initAlexa(cookieData);
-      await sendVoiceCommand(alexa, deviceSerial, message, commandType);
+      // Retry with a fresh init
+      const retryAlexa = await initAlexa(cookieString);
+      await sendVoiceCommand(retryAlexa, deviceSerial, message, commandType);
 
       console.log(JSON.stringify({
         action: 'announcement_sent_after_retry',
@@ -51,15 +51,5 @@ export const handler = async (event: AnnouncementEvent): Promise<void> => {
     } else {
       throw error;
     }
-  }
-
-  // Persist any refreshed cookie data
-  const updatedCookie = getUpdatedCookieData(alexa);
-  if (updatedCookie && updatedCookie.tokenDate !== cookieData.tokenDate) {
-    await saveCookieData(updatedCookie);
-    console.log(JSON.stringify({
-      action: 'cookie_refreshed_and_saved',
-      reminderId,
-    }));
   }
 };

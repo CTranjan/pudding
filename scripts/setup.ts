@@ -1,23 +1,22 @@
 /**
  * Pudding Setup Script
  *
- * Generates the initial Alexa session cookie and discovers the target Echo Dot.
- * Run this on a machine with a web browser:
+ * Discovers Echo devices and saves credentials to AWS SSM.
  *
  *   npx ts-node scripts/setup.ts
  *
  * How it works:
- * 1. You log into alexa.amazon.com.br normally in your browser
- * 2. You copy your cookies from DevTools and paste them here
- * 3. The script uses those cookies to discover your Echo devices
+ * 1. You log into alexa.amazon.com.br in your browser
+ * 2. Copy the full Cookie header from DevTools > Network tab
+ * 3. Paste it here — the script calls the Alexa API directly to list devices
  * 4. You select the target Echo Dot
- * 5. The script saves the cookie and device serial to AWS SSM Parameter Store
+ * 5. The script saves the cookie and device serial to SSM
  */
 
 import * as readline from 'readline';
+import * as https from 'https';
 import { SSMClient, PutParameterCommand } from '@aws-sdk/client-ssm';
-import AlexaRemote from 'alexa-remote2';
-import { ALEXA_CONFIG, SSM_PATHS, CookieData } from '../src/lib/types';
+import { SSM_PATHS } from '../src/lib/types';
 
 const AWS_REGION = process.env.AWS_REGION || 'us-east-2';
 const ssmClient = new SSMClient({ region: AWS_REGION });
@@ -32,81 +31,72 @@ function ask(question: string): Promise<string> {
   });
 }
 
-function askMultiline(prompt: string): Promise<string> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    console.log(prompt);
-    const lines: string[] = [];
-    rl.on('line', (line) => {
-      if (line === '') {
-        rl.close();
-        resolve(lines.join('\n'));
-      } else {
-        lines.push(line);
-      }
-    });
-  });
-}
-
-/**
- * Initialize alexa-remote2 with a browser cookie string to discover devices.
- */
-function initAlexaWithCookie(cookieString: string): Promise<AlexaRemote> {
-  return new Promise((resolve, reject) => {
-    const alexa = new AlexaRemote();
-
-    alexa.init(
-      {
-        cookie: cookieString,
-        amazonPage: ALEXA_CONFIG.amazonPage,
-        alexaServiceHost: ALEXA_CONFIG.alexaServiceHost,
-        acceptLanguage: ALEXA_CONFIG.acceptLanguage,
-        usePushConnection: false,
-        cookieRefreshInterval: 0,
-      },
-      (err) => {
-        if (err) {
-          reject(new Error(`Alexa init failed: ${err.message}`));
-          return;
-        }
-        resolve(alexa);
-      }
-    );
-  });
-}
-
-interface DeviceInfo {
+interface AlexaDevice {
   accountName: string;
   serialNumber: string;
   deviceFamily: string;
+  deviceType: string;
   deviceTypeFriendlyName?: string;
   online: boolean;
 }
 
-function listDevices(alexa: AlexaRemote): DeviceInfo[] {
-  const devices: DeviceInfo[] = [];
-  const serialNumbers = (alexa as unknown as { serialNumbers: Record<string, DeviceInfo> }).serialNumbers;
+/**
+ * Call the Alexa API directly using the browser cookie.
+ * No alexa-remote2 needed — just a simple HTTPS GET.
+ */
+function fetchDevices(cookieString: string): Promise<AlexaDevice[]> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error('Request timed out after 15 seconds'));
+    }, 15000);
 
-  for (const [serial, device] of Object.entries(serialNumbers)) {
-    devices.push({
-      accountName: device.accountName,
-      serialNumber: serial,
-      deviceFamily: device.deviceFamily,
-      deviceTypeFriendlyName: device.deviceTypeFriendlyName,
-      online: device.online,
+    const req = https.get(
+      'https://alexa.amazon.com.br/api/devices-v2/device?cached=true',
+      {
+        headers: {
+          Cookie: cookieString,
+          'Accept-Language': 'pt-BR',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: 'application/json',
+        },
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (chunk) => (data += chunk));
+        res.on('end', () => {
+          clearTimeout(timeout);
+          try {
+            const parsed = JSON.parse(data);
+            const devices: AlexaDevice[] = (parsed.devices || []).map((d: Record<string, unknown>) => ({
+              accountName: d.accountName as string,
+              serialNumber: d.serialNumber as string,
+              deviceFamily: d.deviceFamily as string,
+              deviceType: d.deviceType as string,
+              deviceTypeFriendlyName: d.deviceTypeFriendlyName as string | undefined,
+              online: Boolean(d.online),
+            }));
+            resolve(devices);
+          } catch {
+            reject(new Error(`Failed to parse API response: ${data.substring(0, 200)}`));
+          }
+        });
+      }
+    );
+
+    req.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
     });
-  }
-
-  return devices;
+  });
 }
 
-async function saveToSSM(cookieData: string, deviceSerial: string): Promise<void> {
+async function saveToSSM(cookieString: string, deviceSerial: string): Promise<void> {
   console.log('\n📦 Saving to AWS SSM Parameter Store...');
 
   await ssmClient.send(
     new PutParameterCommand({
       Name: SSM_PATHS.cookieData,
-      Value: cookieData,
+      Value: cookieString,
       Type: 'SecureString',
       Overwrite: true,
     })
@@ -128,41 +118,31 @@ async function main(): Promise<void> {
   console.log('🍮 Pudding Setup\n');
 
   console.log('Step 1: Get your Alexa cookies\n');
-  console.log('  1. Open your browser and go to: https://alexa.amazon.com.br');
-  console.log('  2. Log in to your Amazon account if not already logged in');
-  console.log('  3. Once you see the Alexa dashboard, open DevTools:');
-  console.log('     - Chrome: F12 (or Cmd+Option+I on Mac)');
-  console.log('     - Go to the "Application" tab (Chrome) or "Storage" tab (Firefox)');
-  console.log('     - Click "Cookies" > "https://alexa.amazon.com.br"');
-  console.log('  4. Now open the Console tab and paste this command:\n');
-  console.log('     document.cookie\n');
-  console.log('  5. Copy the ENTIRE output (it will be a long string starting with something like "session-id=...")\n');
+  console.log('  1. Go to www.amazon.com.br and make sure you\'re logged in');
+  console.log('  2. Then navigate to: https://alexa.amazon.com.br/api/devices-v2/device?cached=true');
+  console.log('  3. Press F12 > Network tab > Refresh the page');
+  console.log('  4. Click the first request > Request Headers > copy the Cookie: value\n');
 
   const cookieString = await ask('Paste your cookie string here: ');
 
-  if (!cookieString || cookieString.length < 50) {
-    console.error('❌ That doesn\'t look like a valid cookie string. It should be a long string with multiple key=value pairs.');
+  if (!cookieString || cookieString.length < 100) {
+    console.error('❌ That doesn\'t look like a valid cookie string. Make sure you copied the full Cookie header from the Network tab.');
     process.exit(1);
   }
 
   console.log(`\n✅ Cookie received (${cookieString.length} characters)\n`);
 
-  // Step 2: Initialize alexa-remote2 with the cookie to discover devices
+  // Step 2: Call Alexa API directly to get devices
   console.log('🔍 Discovering Echo devices...\n');
 
-  let alexa: AlexaRemote;
+  let devices: AlexaDevice[];
   try {
-    alexa = await initAlexaWithCookie(cookieString);
+    devices = await fetchDevices(cookieString);
   } catch (error) {
-    console.error('❌ Failed to connect to Alexa. Make sure you:');
-    console.error('   - Copied the cookies from alexa.amazon.com.br (not amazon.com.br)');
-    console.error('   - Are currently logged in when you copy the cookies');
-    console.error('   - Copied the entire cookie string');
-    console.error(`\n   Error: ${error instanceof Error ? error.message : error}`);
+    console.error('❌ Failed to fetch devices from Alexa API.');
+    console.error(`   Error: ${error instanceof Error ? error.message : error}`);
     process.exit(1);
   }
-
-  const devices = listDevices(alexa);
 
   if (devices.length === 0) {
     console.error('❌ No Echo devices found on this account.');
@@ -189,11 +169,7 @@ async function main(): Promise<void> {
   console.log(`\n📍 Selected: ${selectedDevice.accountName} (${selectedDevice.serialNumber})`);
 
   // Step 4: Save to SSM
-  // Save the cookie string and the cookieData object (which includes refresh tokens)
-  const cookieData = (alexa as unknown as { cookieData?: Record<string, unknown> }).cookieData;
-  const dataToSave = cookieData ? JSON.stringify(cookieData) : cookieString;
-
-  await saveToSSM(dataToSave, selectedDevice.serialNumber);
+  await saveToSSM(cookieString, selectedDevice.serialNumber);
 
   console.log('\n🎉 Setup complete!');
   console.log('\nNext steps:');

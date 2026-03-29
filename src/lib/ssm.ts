@@ -3,11 +3,11 @@ import {
   GetParameterCommand,
   PutParameterCommand,
 } from '@aws-sdk/client-ssm';
-import { CookieData, SSM_PATHS } from './types';
+import { SSM_PATHS } from './types';
 
 const ssmClient = new SSMClient({});
 
-export async function getCookieData(): Promise<CookieData> {
+export async function getCookieString(): Promise<string> {
   const result = await ssmClient.send(
     new GetParameterCommand({
       Name: SSM_PATHS.cookieData,
@@ -20,14 +20,14 @@ export async function getCookieData(): Promise<CookieData> {
     throw new Error(`SSM parameter ${SSM_PATHS.cookieData} is empty or not found`);
   }
 
-  return JSON.parse(value) as CookieData;
+  return value;
 }
 
-export async function saveCookieData(data: CookieData): Promise<void> {
+export async function saveCookieString(cookie: string): Promise<void> {
   await ssmClient.send(
     new PutParameterCommand({
       Name: SSM_PATHS.cookieData,
-      Value: JSON.stringify(data),
+      Value: cookie,
       Type: 'SecureString',
       Overwrite: true,
     })
