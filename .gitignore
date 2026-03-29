@@ -3,6 +3,7 @@ cdk.out/
 dist/
 *.js
 *.d.ts
+!src/lib/alexa-cookie2.d.ts
 *.js.map
 
 # Environment files

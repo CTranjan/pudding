@@ -83,7 +83,7 @@ function initAlexaWithCookie(cookieData: CookieData): Promise<AlexaRemote> {
 
     alexa.init(
       {
-        cookie: cookieData as Record<string, unknown>,
+        cookie: cookieData as unknown as string,
         amazonPage: ALEXA_CONFIG.amazonPage,
         alexaServiceHost: ALEXA_CONFIG.alexaServiceHost,
         acceptLanguage: ALEXA_CONFIG.acceptLanguage,
