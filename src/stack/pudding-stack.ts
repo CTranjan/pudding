@@ -47,21 +47,16 @@ export class PuddingStack extends cdk.Stack {
         minify: true,
         sourceMap: true,
         target: 'node20',
-        // alexa-remote2 uses require() for optional deps — mark as external if issues arise
+        // alexa-remote2 reads its own package.json at runtime for version info,
+        // so keep it (and alexa-cookie2) as installed node_modules
       },
     });
 
-    // IAM: read SSM params, write cookie (for mid-announcement refresh)
+    // IAM: read SSM params
     announcementFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['ssm:GetParameter'],
         resources: [ssmCookieArn, ssmDeviceArn],
-      })
-    );
-    announcementFn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['ssm:PutParameter'],
-        resources: [ssmCookieArn],
       })
     );
 

@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockSnsSend, mockInit } = vi.hoisted(() => ({
+const { mockSnsSend, mockGetCustomerId } = vi.hoisted(() => ({
   mockSnsSend: vi.fn(),
-  mockInit: vi.fn(),
+  mockGetCustomerId: vi.fn(),
 }));
 
 // Mock AWS SSM
@@ -11,7 +11,6 @@ vi.mock('@aws-sdk/client-ssm', () => {
   return {
     SSMClient: vi.fn(() => ({ send: mockSend })),
     GetParameterCommand: vi.fn((input: Record<string, unknown>) => ({ input })),
-    PutParameterCommand: vi.fn((input: Record<string, unknown>) => ({ input })),
     __mockSend: mockSend,
   };
 });
@@ -22,17 +21,11 @@ vi.mock('@aws-sdk/client-sns', () => ({
   PublishCommand: vi.fn((input: Record<string, unknown>) => ({ input })),
 }));
 
-// Mock alexa-remote2
-vi.mock('alexa-remote2', () => {
-  return {
-    default: vi.fn(() => ({
-      init: mockInit,
-      cookieData: { localCookie: 'refreshed', tokenDate: 2000 },
-    })),
-  };
-});
+// Mock alexa-client
+vi.mock('../src/lib/alexa-client', () => ({
+  getCustomerId: mockGetCustomerId,
+}));
 
-// Set env var before importing handler
 process.env.SNS_TOPIC_ARN = 'arn:aws:sns:us-east-2:123456789:pudding-alerts';
 
 import { handler } from '../src/lambda/cookie-refresh';
@@ -42,40 +35,31 @@ const getMockSend = async () => {
   return mod.__mockSend;
 };
 
-const fakeCookieString = 'session-id=123; at-acbbr=Atza|abc; sess-at-acbbr=xyz';
+const fakeCookie = 'session-id=123; at-acbbr=Atza|abc';
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockSnsSend.mockResolvedValue({});
-
-  mockInit.mockImplementation((_opts: unknown, cb: (err: Error | null) => void) => {
-    cb(null);
-  });
+  mockGetCustomerId.mockResolvedValue('CUSTOMER123');
 });
 
 describe('cookie-refresh handler', () => {
-  it('validates cookie and saves updated data to SSM', async () => {
+  it('validates cookie by calling bootstrap API', async () => {
     const mockSend = await getMockSend();
-    mockSend
-      .mockResolvedValueOnce({ Parameter: { Value: fakeCookieString } }) // get
-      .mockResolvedValueOnce({}); // put
+    mockSend.mockResolvedValueOnce({ Parameter: { Value: fakeCookie } });
 
     await handler();
 
-    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(mockGetCustomerId).toHaveBeenCalledWith(fakeCookie);
     expect(mockSnsSend).not.toHaveBeenCalled();
   });
 
-  it('publishes SNS alert when init fails (cookie expired)', async () => {
+  it('publishes SNS alert when cookie is invalid', async () => {
     const mockSend = await getMockSend();
-    mockSend.mockResolvedValueOnce({ Parameter: { Value: fakeCookieString } });
+    mockSend.mockResolvedValueOnce({ Parameter: { Value: fakeCookie } });
+    mockGetCustomerId.mockRejectedValue(new Error('Alexa API 401'));
 
-    mockInit.mockImplementation((_opts: unknown, cb: (err: Error | null) => void) => {
-      cb(new Error('Authentication failed'));
-    });
-
-    await expect(handler()).rejects.toThrow('Alexa init failed');
-
+    await expect(handler()).rejects.toThrow('Alexa API 401');
     expect(mockSnsSend).toHaveBeenCalledTimes(1);
   });
 
@@ -84,7 +68,6 @@ describe('cookie-refresh handler', () => {
     mockSend.mockRejectedValueOnce(new Error('SSM access denied'));
 
     await expect(handler()).rejects.toThrow('SSM access denied');
-
     expect(mockSnsSend).toHaveBeenCalledTimes(1);
   });
 });

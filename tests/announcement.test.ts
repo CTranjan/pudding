@@ -1,30 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockSendSequenceCommand, mockInit } = vi.hoisted(() => ({
-  mockSendSequenceCommand: vi.fn(),
-  mockInit: vi.fn(),
-}));
-
 // Mock AWS SSM
 vi.mock('@aws-sdk/client-ssm', () => {
   const mockSend = vi.fn();
   return {
     SSMClient: vi.fn(() => ({ send: mockSend })),
     GetParameterCommand: vi.fn((input: Record<string, unknown>) => ({ input })),
-    PutParameterCommand: vi.fn((input: Record<string, unknown>) => ({ input })),
     __mockSend: mockSend,
   };
 });
 
-// Mock alexa-remote2
-vi.mock('alexa-remote2', () => {
-  return {
-    default: vi.fn(() => ({
-      init: mockInit,
-      sendSequenceCommand: mockSendSequenceCommand,
-    })),
-  };
-});
+// Mock our alexa-client module
+const { mockGetCustomerId, mockGetDeviceType, mockSendSpeak, mockSendAnnouncement } = vi.hoisted(() => ({
+  mockGetCustomerId: vi.fn(),
+  mockGetDeviceType: vi.fn(),
+  mockSendSpeak: vi.fn(),
+  mockSendAnnouncement: vi.fn(),
+}));
+
+vi.mock('../src/lib/alexa-client', () => ({
+  getCustomerId: mockGetCustomerId,
+  getDeviceType: mockGetDeviceType,
+  sendSpeak: mockSendSpeak,
+  sendAnnouncement: mockSendAnnouncement,
+}));
 
 import { handler } from '../src/lambda/announcement';
 
@@ -33,63 +32,46 @@ const getMockSend = async () => {
   return mod.__mockSend;
 };
 
-const fakeCookieString = 'session-id=123; at-acbbr=Atza|abc; sess-at-acbbr=xyz';
+const fakeCookie = 'session-id=123; at-acbbr=Atza|abc';
 
 beforeEach(() => {
   vi.clearAllMocks();
-
-  mockInit.mockImplementation((_opts: unknown, cb: (err: Error | null) => void) => {
-    cb(null);
-  });
-
-  mockSendSequenceCommand.mockImplementation(
-    (_serial: string, _type: string, _msg: string, cb: (err: Error | null) => void) => {
-      cb(null);
-    }
-  );
+  mockGetCustomerId.mockResolvedValue('CUSTOMER123');
+  mockGetDeviceType.mockResolvedValue('A3S5BH2HU6VAYF');
+  mockSendSpeak.mockResolvedValue(undefined);
+  mockSendAnnouncement.mockResolvedValue(undefined);
 });
 
 describe('announcement handler', () => {
   it('reads SSM parameters and sends a speak command', async () => {
     const mockSend = await getMockSend();
     mockSend
-      .mockResolvedValueOnce({ Parameter: { Value: fakeCookieString } })
+      .mockResolvedValueOnce({ Parameter: { Value: fakeCookie } })
       .mockResolvedValueOnce({ Parameter: { Value: 'DEVICE123' } });
 
-    await handler({
-      message: 'Test message',
-      commandType: 'speak',
-      reminderId: 'test-reminder',
-    });
+    await handler({ message: 'Test message', commandType: 'speak', reminderId: 'test' });
 
     expect(mockSend).toHaveBeenCalledTimes(2);
-    expect(mockInit).toHaveBeenCalledTimes(1);
-    expect(mockSendSequenceCommand).toHaveBeenCalledWith(
-      'DEVICE123',
-      'speak',
-      'Test message',
-      expect.any(Function)
+    expect(mockGetCustomerId).toHaveBeenCalledWith(fakeCookie);
+    expect(mockGetDeviceType).toHaveBeenCalledWith(fakeCookie, 'DEVICE123');
+    expect(mockSendSpeak).toHaveBeenCalledWith(
+      fakeCookie, 'DEVICE123', 'A3S5BH2HU6VAYF', 'CUSTOMER123', 'Test message'
     );
+    expect(mockSendAnnouncement).not.toHaveBeenCalled();
   });
 
   it('sends an announcement command when specified', async () => {
     const mockSend = await getMockSend();
     mockSend
-      .mockResolvedValueOnce({ Parameter: { Value: fakeCookieString } })
+      .mockResolvedValueOnce({ Parameter: { Value: fakeCookie } })
       .mockResolvedValueOnce({ Parameter: { Value: 'DEVICE123' } });
 
-    await handler({
-      message: 'Announcement test',
-      commandType: 'announcement',
-      reminderId: 'test-announcement',
-    });
+    await handler({ message: 'Announce', commandType: 'announcement', reminderId: 'test' });
 
-    expect(mockSendSequenceCommand).toHaveBeenCalledWith(
-      'DEVICE123',
-      'announcement',
-      'Announcement test',
-      expect.any(Function)
+    expect(mockSendAnnouncement).toHaveBeenCalledWith(
+      fakeCookie, 'DEVICE123', 'A3S5BH2HU6VAYF', 'CUSTOMER123', 'Announce'
     );
+    expect(mockSendSpeak).not.toHaveBeenCalled();
   });
 
   it('throws when SSM cookie parameter is missing', async () => {
@@ -101,40 +83,16 @@ describe('announcement handler', () => {
     ).rejects.toThrow('empty or not found');
   });
 
-  it('retries on cookie-related errors', async () => {
+  it('propagates Alexa API errors', async () => {
     const mockSend = await getMockSend();
     mockSend
-      .mockResolvedValueOnce({ Parameter: { Value: fakeCookieString } })
+      .mockResolvedValueOnce({ Parameter: { Value: fakeCookie } })
       .mockResolvedValueOnce({ Parameter: { Value: 'DEVICE123' } });
 
-    mockSendSequenceCommand
-      .mockImplementationOnce(
-        (_s: string, _t: string, _m: string, cb: (err: Error | null) => void) => cb(new Error('cookie expired'))
-      )
-      .mockImplementationOnce(
-        (_s: string, _t: string, _m: string, cb: (err: Error | null) => void) => cb(null)
-      );
-
-    await handler({ message: 'Retry test', commandType: 'speak', reminderId: 'retry' });
-
-    expect(mockSendSequenceCommand).toHaveBeenCalledTimes(2);
-    expect(mockInit).toHaveBeenCalledTimes(2);
-  });
-
-  it('throws non-cookie errors without retrying', async () => {
-    const mockSend = await getMockSend();
-    mockSend
-      .mockResolvedValueOnce({ Parameter: { Value: fakeCookieString } })
-      .mockResolvedValueOnce({ Parameter: { Value: 'DEVICE123' } });
-
-    mockSendSequenceCommand.mockImplementation(
-      (_s: string, _t: string, _m: string, cb: (err: Error | null) => void) => cb(new Error('network timeout'))
-    );
+    mockSendSpeak.mockRejectedValue(new Error('Alexa API 401'));
 
     await expect(
-      handler({ message: 'Fail test', commandType: 'speak', reminderId: 'fail' })
-    ).rejects.toThrow('network timeout');
-
-    expect(mockSendSequenceCommand).toHaveBeenCalledTimes(1);
+      handler({ message: 'Test', commandType: 'speak', reminderId: 'test' })
+    ).rejects.toThrow('Alexa API 401');
   });
 });
