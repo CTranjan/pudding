@@ -51,7 +51,7 @@ function initAlexaWithProxy(): Promise<{ alexa: AlexaRemote; cookieData: CookieD
         usePushConnection: false,
         cookieRefreshInterval: 0,
       },
-      (err: Error | null) => {
+      (err) => {
         if (err) {
           reject(new Error(`Alexa init failed: ${err.message}`));
           return;
