@@ -17,6 +17,7 @@
 
 import * as readline from 'readline';
 import { SSMClient, PutParameterCommand } from '@aws-sdk/client-ssm';
+import alexaCookie from 'alexa-cookie2';
 import AlexaRemote from 'alexa-remote2';
 import { ALEXA_CONFIG, SSM_PATHS, CookieData } from '../src/lib/types';
 
@@ -35,18 +36,56 @@ function ask(question: string): Promise<string> {
   });
 }
 
-function initAlexaWithProxy(): Promise<{ alexa: AlexaRemote; cookieData: CookieData }> {
+/**
+ * Step 1: Use alexa-cookie2 directly to run the proxy login flow.
+ * This starts a local Express server — the user logs in via browser,
+ * and the cookie + registration data are returned in the callback.
+ */
+function loginViaProxy(): Promise<CookieData> {
   return new Promise((resolve, reject) => {
-    const alexa = new AlexaRemote();
-
     console.log(`\n🔑 Starting login proxy on http://localhost:${PROXY_PORT}`);
-    console.log('   Open this URL in your browser and log into your Amazon account.\n');
+    console.log('   Open this URL in your browser and log into your Amazon account.');
+    console.log('   ⏳ Waiting for login...\n');
 
-    alexa.init(
+    alexaCookie.generateAlexaCookie(
+      '', // email — not used in proxy mode
+      '', // password — not used in proxy mode
       {
         proxyOwnIp: 'localhost',
         proxyPort: PROXY_PORT,
         amazonPage: ALEXA_CONFIG.amazonPage,
+        baseAmazonPage: ALEXA_CONFIG.baseAmazonPage,
+        acceptLanguage: ALEXA_CONFIG.acceptLanguage,
+        setupProxy: true,
+        proxyLogLevel: 'warn',
+      },
+      (err, result) => {
+        if (err) {
+          reject(new Error(`Login failed: ${err.message || err}`));
+          return;
+        }
+        if (!result) {
+          reject(new Error('No cookie data received after login'));
+          return;
+        }
+        resolve(result as unknown as CookieData);
+      }
+    );
+  });
+}
+
+/**
+ * Step 2: Initialize alexa-remote2 with the obtained cookie to discover devices.
+ */
+function initAlexaWithCookie(cookieData: CookieData): Promise<AlexaRemote> {
+  return new Promise((resolve, reject) => {
+    const alexa = new AlexaRemote();
+
+    alexa.init(
+      {
+        cookie: cookieData as Record<string, unknown>,
+        amazonPage: ALEXA_CONFIG.amazonPage,
+        alexaServiceHost: ALEXA_CONFIG.alexaServiceHost,
         acceptLanguage: ALEXA_CONFIG.acceptLanguage,
         usePushConnection: false,
         cookieRefreshInterval: 0,
@@ -56,14 +95,7 @@ function initAlexaWithProxy(): Promise<{ alexa: AlexaRemote; cookieData: CookieD
           reject(new Error(`Alexa init failed: ${err.message}`));
           return;
         }
-
-        const cookieData = (alexa as unknown as { cookieData?: CookieData }).cookieData;
-        if (!cookieData) {
-          reject(new Error('No cookie data received after login'));
-          return;
-        }
-
-        resolve({ alexa, cookieData });
+        resolve(alexa);
       }
     );
   });
@@ -125,11 +157,13 @@ async function main(): Promise<void> {
   console.log('  2. Discover your Echo devices');
   console.log('  3. Save credentials to AWS SSM Parameter Store\n');
 
-  // Step 1: Login via proxy
-  const { alexa, cookieData } = await initAlexaWithProxy();
+  // Step 1: Login via proxy (uses alexa-cookie2 directly)
+  const cookieData = await loginViaProxy();
   console.log('\n✅ Login successful! Cookie captured.\n');
 
-  // Step 2: Discover devices
+  // Step 2: Initialize alexa-remote2 with the cookie to discover devices
+  console.log('🔍 Discovering Echo devices...');
+  const alexa = await initAlexaWithCookie(cookieData);
   const devices = listDevices(alexa);
 
   if (devices.length === 0) {
