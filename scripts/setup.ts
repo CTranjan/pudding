@@ -6,25 +6,20 @@
  *
  *   npx ts-node scripts/setup.ts
  *
- * Steps:
- * 1. Starts a local proxy server on port 3001
- * 2. You open http://localhost:3001 in your browser and log into amazon.com.br
- * 3. The script captures the session cookie and registration data
- * 4. It initializes alexa-remote2 to list all Echo devices
- * 5. You select the target Echo Dot from the list
- * 6. The script saves cookie data and device serial to AWS SSM Parameter Store
+ * How it works:
+ * 1. You log into alexa.amazon.com.br normally in your browser
+ * 2. You copy your cookies from DevTools and paste them here
+ * 3. The script uses those cookies to discover your Echo devices
+ * 4. You select the target Echo Dot
+ * 5. The script saves the cookie and device serial to AWS SSM Parameter Store
  */
 
 import * as readline from 'readline';
 import { SSMClient, PutParameterCommand } from '@aws-sdk/client-ssm';
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const alexaCookie = require('alexa-cookie2');
 import AlexaRemote from 'alexa-remote2';
 import { ALEXA_CONFIG, SSM_PATHS, CookieData } from '../src/lib/types';
 
-const PROXY_PORT = 3001;
 const AWS_REGION = process.env.AWS_REGION || 'us-east-2';
-
 const ssmClient = new SSMClient({ region: AWS_REGION });
 
 function ask(question: string): Promise<string> {
@@ -37,63 +32,32 @@ function ask(question: string): Promise<string> {
   });
 }
 
-/**
- * Step 1: Use alexa-cookie2 directly to run the proxy login flow.
- * This starts a local Express server — the user logs in via browser,
- * and the cookie + registration data are returned in the callback.
- */
-function loginViaProxy(): Promise<CookieData> {
-  return new Promise((resolve, reject) => {
-    console.log(`\n🔑 Starting login proxy on http://localhost:${PROXY_PORT}`);
-    console.log('   Open this URL in your browser and log into your Amazon account.');
-    console.log('   ⏳ Waiting for login...\n');
-
-    alexaCookie.generateAlexaCookie(
-      '', // email — not used in proxy mode
-      '', // password — not used in proxy mode
-      {
-        proxyOwnIp: 'localhost',
-        proxyPort: PROXY_PORT,
-        amazonPage: ALEXA_CONFIG.amazonPage,
-        baseAmazonPage: ALEXA_CONFIG.baseAmazonPage,
-        acceptLanguage: ALEXA_CONFIG.acceptLanguage,
-        amazonPageProxyLanguage: 'pt_BR',
-        setupProxy: true,
-        proxyLogLevel: 'info',
-      },
-      (err: Error | null, result: Record<string, unknown>) => {
-        // The library calls this callback TWICE in proxy mode:
-        // 1st: with an "error" that says "Please open browser..." (this is a prompt, not a real error)
-        // 2nd: with the actual cookie data after successful login
-        if (err) {
-          const msg = String(err.message || err);
-          if (msg.includes('Please open') || msg.includes('localhost')) {
-            // This is the proxy startup prompt — ignore it, keep waiting
-            return;
-          }
-          reject(new Error(`Login failed: ${msg}`));
-          return;
-        }
-        if (!result) {
-          reject(new Error('No cookie data received after login'));
-          return;
-        }
-        resolve(result as unknown as CookieData);
+function askMultiline(prompt: string): Promise<string> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    console.log(prompt);
+    const lines: string[] = [];
+    rl.on('line', (line) => {
+      if (line === '') {
+        rl.close();
+        resolve(lines.join('\n'));
+      } else {
+        lines.push(line);
       }
-    );
+    });
   });
 }
 
 /**
- * Step 2: Initialize alexa-remote2 with the obtained cookie to discover devices.
+ * Initialize alexa-remote2 with a browser cookie string to discover devices.
  */
-function initAlexaWithCookie(cookieData: CookieData): Promise<AlexaRemote> {
+function initAlexaWithCookie(cookieString: string): Promise<AlexaRemote> {
   return new Promise((resolve, reject) => {
     const alexa = new AlexaRemote();
 
     alexa.init(
       {
-        cookie: cookieData as unknown as string,
+        cookie: cookieString,
         amazonPage: ALEXA_CONFIG.amazonPage,
         alexaServiceHost: ALEXA_CONFIG.alexaServiceHost,
         acceptLanguage: ALEXA_CONFIG.acceptLanguage,
@@ -136,13 +100,13 @@ function listDevices(alexa: AlexaRemote): DeviceInfo[] {
   return devices;
 }
 
-async function saveToSSM(cookieData: CookieData, deviceSerial: string): Promise<void> {
+async function saveToSSM(cookieData: string, deviceSerial: string): Promise<void> {
   console.log('\n📦 Saving to AWS SSM Parameter Store...');
 
   await ssmClient.send(
     new PutParameterCommand({
       Name: SSM_PATHS.cookieData,
-      Value: JSON.stringify(cookieData),
+      Value: cookieData,
       Type: 'SecureString',
       Overwrite: true,
     })
@@ -162,18 +126,42 @@ async function saveToSSM(cookieData: CookieData, deviceSerial: string): Promise<
 
 async function main(): Promise<void> {
   console.log('🍮 Pudding Setup\n');
-  console.log('This script will:');
-  console.log('  1. Log into your Amazon account via browser proxy');
-  console.log('  2. Discover your Echo devices');
-  console.log('  3. Save credentials to AWS SSM Parameter Store\n');
 
-  // Step 1: Login via proxy (uses alexa-cookie2 directly)
-  const cookieData = await loginViaProxy();
-  console.log('\n✅ Login successful! Cookie captured.\n');
+  console.log('Step 1: Get your Alexa cookies\n');
+  console.log('  1. Open your browser and go to: https://alexa.amazon.com.br');
+  console.log('  2. Log in to your Amazon account if not already logged in');
+  console.log('  3. Once you see the Alexa dashboard, open DevTools:');
+  console.log('     - Chrome: F12 (or Cmd+Option+I on Mac)');
+  console.log('     - Go to the "Application" tab (Chrome) or "Storage" tab (Firefox)');
+  console.log('     - Click "Cookies" > "https://alexa.amazon.com.br"');
+  console.log('  4. Now open the Console tab and paste this command:\n');
+  console.log('     document.cookie\n');
+  console.log('  5. Copy the ENTIRE output (it will be a long string starting with something like "session-id=...")\n');
+
+  const cookieString = await ask('Paste your cookie string here: ');
+
+  if (!cookieString || cookieString.length < 50) {
+    console.error('❌ That doesn\'t look like a valid cookie string. It should be a long string with multiple key=value pairs.');
+    process.exit(1);
+  }
+
+  console.log(`\n✅ Cookie received (${cookieString.length} characters)\n`);
 
   // Step 2: Initialize alexa-remote2 with the cookie to discover devices
-  console.log('🔍 Discovering Echo devices...');
-  const alexa = await initAlexaWithCookie(cookieData);
+  console.log('🔍 Discovering Echo devices...\n');
+
+  let alexa: AlexaRemote;
+  try {
+    alexa = await initAlexaWithCookie(cookieString);
+  } catch (error) {
+    console.error('❌ Failed to connect to Alexa. Make sure you:');
+    console.error('   - Copied the cookies from alexa.amazon.com.br (not amazon.com.br)');
+    console.error('   - Are currently logged in when you copy the cookies');
+    console.error('   - Copied the entire cookie string');
+    console.error(`\n   Error: ${error instanceof Error ? error.message : error}`);
+    process.exit(1);
+  }
+
   const devices = listDevices(alexa);
 
   if (devices.length === 0) {
@@ -201,14 +189,20 @@ async function main(): Promise<void> {
   console.log(`\n📍 Selected: ${selectedDevice.accountName} (${selectedDevice.serialNumber})`);
 
   // Step 4: Save to SSM
-  await saveToSSM(cookieData, selectedDevice.serialNumber);
+  // Save the cookie string and the cookieData object (which includes refresh tokens)
+  const cookieData = (alexa as unknown as { cookieData?: Record<string, unknown> }).cookieData;
+  const dataToSave = cookieData ? JSON.stringify(cookieData) : cookieString;
+
+  await saveToSSM(dataToSave, selectedDevice.serialNumber);
 
   console.log('\n🎉 Setup complete!');
   console.log('\nNext steps:');
-  console.log('  1. Deploy the CDK stack:  pnpm deploy -c alertEmail=you@example.com');
-  console.log('  2. Confirm the SNS email subscription');
-  console.log('  3. Test manually:  aws lambda invoke --function-name pudding-announcement \\');
-  console.log('       --payload \'{"message":"Teste!","commandType":"speak","reminderId":"test"}\' out.json');
+  console.log('  1. Go back to your EC2 terminal');
+  console.log('  2. Deploy:  ALERT_EMAIL=you@example.com pnpm deploy -c alertEmail=you@example.com');
+  console.log('  3. Confirm the SNS email subscription');
+  console.log('  4. Test:  aws lambda invoke --function-name pudding-announcement \\');
+  console.log('       --payload \'{"message":"Teste!","commandType":"speak","reminderId":"test"}\' \\');
+  console.log('       --cli-binary-format raw-in-base64-out --region us-east-2 out.json');
 
   process.exit(0);
 }
