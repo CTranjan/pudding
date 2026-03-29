@@ -17,7 +17,8 @@
 
 import * as readline from 'readline';
 import { SSMClient, PutParameterCommand } from '@aws-sdk/client-ssm';
-import alexaCookie from 'alexa-cookie2';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const alexaCookie = require('alexa-cookie2');
 import AlexaRemote from 'alexa-remote2';
 import { ALEXA_CONFIG, SSM_PATHS, CookieData } from '../src/lib/types';
 
@@ -59,7 +60,7 @@ function loginViaProxy(): Promise<CookieData> {
         setupProxy: true,
         proxyLogLevel: 'warn',
       },
-      (err, result) => {
+      (err: Error | null, result: Record<string, unknown>) => {
         if (err) {
           reject(new Error(`Login failed: ${err.message || err}`));
           return;
