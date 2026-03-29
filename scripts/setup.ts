@@ -57,8 +57,9 @@ function loginViaProxy(): Promise<CookieData> {
         amazonPage: ALEXA_CONFIG.amazonPage,
         baseAmazonPage: ALEXA_CONFIG.baseAmazonPage,
         acceptLanguage: ALEXA_CONFIG.acceptLanguage,
+        amazonPageProxyLanguage: 'pt_BR',
         setupProxy: true,
-        proxyLogLevel: 'warn',
+        proxyLogLevel: 'info',
       },
       (err: Error | null, result: Record<string, unknown>) => {
         // The library calls this callback TWICE in proxy mode:
