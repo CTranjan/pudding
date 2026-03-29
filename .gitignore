@@ -1,0 +1,23 @@
+node_modules/
+cdk.out/
+dist/
+*.js
+*.d.ts
+*.js.map
+
+# Environment files
+.env*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CDK
+cdk.context.json
