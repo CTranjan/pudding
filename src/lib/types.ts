@@ -31,6 +31,9 @@ export interface AnnouncementEvent {
   message: string;
   commandType: 'speak' | 'announcement';
   reminderId: string;
+  audioUrl?: string;
+  /** Optional volume level (1–10) to set before speaking. If omitted, device volume is unchanged. */
+  volume?: number;
 }
 
 export const ALEXA_CONFIG = {

@@ -3,7 +3,9 @@ import { getCookieString, getDeviceSerial } from '../lib/ssm';
 import { getCustomerId, getDeviceType, sendSpeak, sendAnnouncement } from '../lib/alexa-client';
 
 export const handler = async (event: AnnouncementEvent): Promise<void> => {
-  const { message, commandType, reminderId } = event;
+  const { message, commandType, reminderId, audioUrl, volume } = event;
+
+  const effectiveMessage = audioUrl ? `<speak><audio src="${audioUrl}"/></speak>` : message;
 
   console.log(JSON.stringify({
     action: 'announcement_start',
@@ -23,9 +25,9 @@ export const handler = async (event: AnnouncementEvent): Promise<void> => {
 
   // Send the voice command
   if (commandType === 'announcement') {
-    await sendAnnouncement(cookie, serialNumber, deviceType, customerId, message);
+    await sendAnnouncement(cookie, serialNumber, deviceType, customerId, message, audioUrl ? effectiveMessage : undefined, volume);
   } else {
-    await sendSpeak(cookie, serialNumber, deviceType, customerId, message);
+    await sendSpeak(cookie, serialNumber, deviceType, customerId, effectiveMessage, volume);
   }
 
   console.log(JSON.stringify({

@@ -8,6 +8,33 @@ interface SequencePayload {
   status: string;
 }
 
+type OperationNode = {
+  '@type': 'com.amazon.alexa.behaviors.model.OpaquePayloadOperationNode';
+  type: string;
+  operationPayload: Record<string, unknown>;
+};
+
+function buildVolumeNode(deviceType: string, serialNumber: string, customerId: string, volume: number): OperationNode {
+  return {
+    '@type': 'com.amazon.alexa.behaviors.model.OpaquePayloadOperationNode',
+    type: 'Alexa.DeviceControls.Volume',
+    operationPayload: {
+      deviceType,
+      deviceSerialNumber: serialNumber,
+      customerId,
+      value: String(Math.min(10, Math.max(1, volume))),
+    },
+  };
+}
+
+function buildStartNode(mainNode: OperationNode, volumeNode?: OperationNode): unknown {
+  if (!volumeNode) return mainNode;
+  return {
+    '@type': 'com.amazon.alexa.behaviors.model.SerialNode',
+    nodesToExecute: [volumeNode, mainNode],
+  };
+}
+
 /**
  * Gets the customer ID from the Alexa bootstrap API.
  * Required to build sequence commands.
@@ -46,21 +73,24 @@ export async function sendSpeak(
   serialNumber: string,
   deviceType: string,
   customerId: string,
-  message: string
+  message: string,
+  volume?: number
 ): Promise<void> {
+  const speakNode: OperationNode = {
+    '@type': 'com.amazon.alexa.behaviors.model.OpaquePayloadOperationNode',
+    type: 'Alexa.Speak',
+    operationPayload: {
+      deviceType,
+      deviceSerialNumber: serialNumber,
+      locale: 'pt-BR',
+      customerId,
+      textToSpeak: message,
+    },
+  };
+
   const sequenceJson = JSON.stringify({
     '@type': 'com.amazon.alexa.behaviors.model.Sequence',
-    startNode: {
-      '@type': 'com.amazon.alexa.behaviors.model.OpaquePayloadOperationNode',
-      type: 'Alexa.Speak',
-      operationPayload: {
-        deviceType,
-        deviceSerialNumber: serialNumber,
-        locale: 'pt-BR',
-        customerId,
-        textToSpeak: message,
-      },
-    },
+    startNode: buildStartNode(speakNode, volume !== undefined ? buildVolumeNode(deviceType, serialNumber, customerId, volume) : undefined),
   });
 
   const payload: SequencePayload = {
@@ -81,29 +111,33 @@ export async function sendAnnouncement(
   serialNumber: string,
   deviceType: string,
   customerId: string,
-  message: string
+  message: string,
+  speakOverride?: string,
+  volume?: number
 ): Promise<void> {
-  const sequenceJson = JSON.stringify({
-    '@type': 'com.amazon.alexa.behaviors.model.Sequence',
-    startNode: {
-      '@type': 'com.amazon.alexa.behaviors.model.OpaquePayloadOperationNode',
-      type: 'AlexaAnnouncement',
-      operationPayload: {
-        expireAfter: 'PT5S',
-        customerId,
-        content: [
-          {
-            locale: 'pt-BR',
-            display: { title: 'Pudding', body: message },
-            speak: { type: 'text', value: message },
-          },
-        ],
-        target: {
-          customerId,
-          devices: [{ deviceSerialNumber: serialNumber, deviceTypeId: deviceType }],
+  const announcementNode: OperationNode = {
+    '@type': 'com.amazon.alexa.behaviors.model.OpaquePayloadOperationNode',
+    type: 'AlexaAnnouncement',
+    operationPayload: {
+      expireAfter: 'PT5S',
+      customerId,
+      content: [
+        {
+          locale: 'pt-BR',
+          display: { title: 'Pudding', body: message },
+          speak: { type: speakOverride ? 'ssml' : 'text', value: speakOverride || message },
         },
+      ],
+      target: {
+        customerId,
+        devices: [{ deviceSerialNumber: serialNumber, deviceTypeId: deviceType }],
       },
     },
+  };
+
+  const sequenceJson = JSON.stringify({
+    '@type': 'com.amazon.alexa.behaviors.model.Sequence',
+    startNode: buildStartNode(announcementNode, volume !== undefined ? buildVolumeNode(deviceType, serialNumber, customerId, volume) : undefined),
   });
 
   const payload: SequencePayload = {

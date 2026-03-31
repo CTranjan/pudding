@@ -55,7 +55,7 @@ describe('announcement handler', () => {
     expect(mockGetCustomerId).toHaveBeenCalledWith(fakeCookie);
     expect(mockGetDeviceType).toHaveBeenCalledWith(fakeCookie, 'DEVICE123');
     expect(mockSendSpeak).toHaveBeenCalledWith(
-      fakeCookie, 'DEVICE123', 'A3S5BH2HU6VAYF', 'CUSTOMER123', 'Test message'
+      fakeCookie, 'DEVICE123', 'A3S5BH2HU6VAYF', 'CUSTOMER123', 'Test message', undefined
     );
     expect(mockSendAnnouncement).not.toHaveBeenCalled();
   });
@@ -69,9 +69,35 @@ describe('announcement handler', () => {
     await handler({ message: 'Announce', commandType: 'announcement', reminderId: 'test' });
 
     expect(mockSendAnnouncement).toHaveBeenCalledWith(
-      fakeCookie, 'DEVICE123', 'A3S5BH2HU6VAYF', 'CUSTOMER123', 'Announce'
+      fakeCookie, 'DEVICE123', 'A3S5BH2HU6VAYF', 'CUSTOMER123', 'Announce', undefined, undefined
     );
     expect(mockSendSpeak).not.toHaveBeenCalled();
+  });
+
+  it('passes volume to sendSpeak when provided', async () => {
+    const mockSend = await getMockSend();
+    mockSend
+      .mockResolvedValueOnce({ Parameter: { Value: fakeCookie } })
+      .mockResolvedValueOnce({ Parameter: { Value: 'DEVICE123' } });
+
+    await handler({ message: 'Test', commandType: 'speak', reminderId: 'test', volume: 9 });
+
+    expect(mockSendSpeak).toHaveBeenCalledWith(
+      fakeCookie, 'DEVICE123', 'A3S5BH2HU6VAYF', 'CUSTOMER123', 'Test', 9
+    );
+  });
+
+  it('passes volume to sendAnnouncement when provided', async () => {
+    const mockSend = await getMockSend();
+    mockSend
+      .mockResolvedValueOnce({ Parameter: { Value: fakeCookie } })
+      .mockResolvedValueOnce({ Parameter: { Value: 'DEVICE123' } });
+
+    await handler({ message: 'Announce', commandType: 'announcement', reminderId: 'test', volume: 8 });
+
+    expect(mockSendAnnouncement).toHaveBeenCalledWith(
+      fakeCookie, 'DEVICE123', 'A3S5BH2HU6VAYF', 'CUSTOMER123', 'Announce', undefined, 8
+    );
   });
 
   it('throws when SSM cookie parameter is missing', async () => {
@@ -94,5 +120,52 @@ describe('announcement handler', () => {
     await expect(
       handler({ message: 'Test', commandType: 'speak', reminderId: 'test' })
     ).rejects.toThrow('Alexa API 401');
+  });
+
+  it('wraps audioUrl in SSML and sends via speak', async () => {
+    const mockSend = await getMockSend();
+    mockSend
+      .mockResolvedValueOnce({ Parameter: { Value: fakeCookie } })
+      .mockResolvedValueOnce({ Parameter: { Value: 'DEVICE123' } });
+
+    await handler({
+      message: 'Take medicine',
+      commandType: 'speak',
+      reminderId: 'test',
+      audioUrl: 'https://bucket.s3.amazonaws.com/test.mp3',
+    });
+
+    expect(mockSendSpeak).toHaveBeenCalledWith(
+      fakeCookie,
+      'DEVICE123',
+      'A3S5BH2HU6VAYF',
+      'CUSTOMER123',
+      '<speak><audio src="https://bucket.s3.amazonaws.com/test.mp3"/></speak>',
+      undefined
+    );
+  });
+
+  it('sends SSML audio for announcement with plain text display', async () => {
+    const mockSend = await getMockSend();
+    mockSend
+      .mockResolvedValueOnce({ Parameter: { Value: fakeCookie } })
+      .mockResolvedValueOnce({ Parameter: { Value: 'DEVICE123' } });
+
+    await handler({
+      message: 'Take medicine',
+      commandType: 'announcement',
+      reminderId: 'test',
+      audioUrl: 'https://bucket.s3.amazonaws.com/test.mp3',
+    });
+
+    expect(mockSendAnnouncement).toHaveBeenCalledWith(
+      fakeCookie,
+      'DEVICE123',
+      'A3S5BH2HU6VAYF',
+      'CUSTOMER123',
+      'Take medicine',
+      '<speak><audio src="https://bucket.s3.amazonaws.com/test.mp3"/></speak>',
+      undefined
+    );
   });
 });
