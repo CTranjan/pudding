@@ -22,7 +22,8 @@ function buildVolumeNode(deviceType: string, serialNumber: string, customerId: s
       deviceType,
       deviceSerialNumber: serialNumber,
       customerId,
-      value: String(Math.min(10, Math.max(1, volume))),
+      // Alexa API uses 0–100; UI sends 1–10, so multiply by 10
+      value: String(Math.min(100, Math.max(0, volume * 10))),
     },
   };
 }
