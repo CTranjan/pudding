@@ -1,17 +1,20 @@
 import { AnnouncementEvent } from '../lib/types';
 import { getCookieString, getDeviceSerial } from '../lib/ssm';
-import { getCustomerId, getDeviceType, sendSpeak, sendAnnouncement } from '../lib/alexa-client';
+import { getCustomerId, getDeviceType, sendSpeak, sendAnnouncement, sendRadio, sendStop } from '../lib/alexa-client';
 
 export const handler = async (event: AnnouncementEvent): Promise<void> => {
-  const { message, commandType, reminderId, audioUrl, volume } = event;
+  const { message, commandType, reminderId, audioUrl, volume, introText } = event;
 
-  const effectiveMessage = audioUrl ? `<speak><audio src="${audioUrl}"/></speak>` : message;
+  // Build SSML when audio URL is present, optionally with intro text
+  const effectiveMessage = audioUrl
+    ? `<speak>${introText ? introText + ' ' : ''}<audio src="${audioUrl}"/></speak>`
+    : message;
 
   console.log(JSON.stringify({
     action: 'announcement_start',
     reminderId,
     commandType,
-    messageLength: message.length,
+    messageLength: message?.length ?? 0,
   }));
 
   const cookie = await getCookieString();
@@ -23,8 +26,12 @@ export const handler = async (event: AnnouncementEvent): Promise<void> => {
     getDeviceType(cookie, serialNumber),
   ]);
 
-  // Send the voice command
-  if (commandType === 'announcement') {
+  // Send the appropriate command
+  if (commandType === 'radio') {
+    await sendRadio(cookie, serialNumber, deviceType, customerId, message, volume);
+  } else if (commandType === 'stop') {
+    await sendStop(cookie, serialNumber, deviceType, customerId);
+  } else if (commandType === 'announcement') {
     await sendAnnouncement(cookie, serialNumber, deviceType, customerId, message, audioUrl ? effectiveMessage : undefined, volume);
   } else {
     await sendSpeak(cookie, serialNumber, deviceType, customerId, effectiveMessage, volume);

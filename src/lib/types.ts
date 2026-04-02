@@ -6,7 +6,7 @@ export interface Reminder {
   /** Message text to be spoken by Alexa */
   message: string;
   /** Command type: 'speak' plays on target device only, 'announcement' can show on displays */
-  commandType: 'speak' | 'announcement';
+  commandType: 'speak' | 'announcement' | 'radio' | 'stop';
 }
 
 export interface CookieData {
@@ -29,11 +29,13 @@ export interface CookieData {
 
 export interface AnnouncementEvent {
   message: string;
-  commandType: 'speak' | 'announcement';
+  commandType: 'speak' | 'announcement' | 'radio' | 'stop';
   reminderId: string;
   audioUrl?: string;
   /** Optional volume level (1–10) to set before speaking. If omitted, device volume is unchanged. */
   volume?: number;
+  /** Optional intro text spoken by Alexa before audio plays (only used when audioUrl is set) */
+  introText?: string;
 }
 
 export const ALEXA_CONFIG = {

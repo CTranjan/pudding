@@ -11,11 +11,13 @@ vi.mock('@aws-sdk/client-ssm', () => {
 });
 
 // Mock our alexa-client module
-const { mockGetCustomerId, mockGetDeviceType, mockSendSpeak, mockSendAnnouncement } = vi.hoisted(() => ({
+const { mockGetCustomerId, mockGetDeviceType, mockSendSpeak, mockSendAnnouncement, mockSendRadio, mockSendStop } = vi.hoisted(() => ({
   mockGetCustomerId: vi.fn(),
   mockGetDeviceType: vi.fn(),
   mockSendSpeak: vi.fn(),
   mockSendAnnouncement: vi.fn(),
+  mockSendRadio: vi.fn(),
+  mockSendStop: vi.fn(),
 }));
 
 vi.mock('../src/lib/alexa-client', () => ({
@@ -23,6 +25,8 @@ vi.mock('../src/lib/alexa-client', () => ({
   getDeviceType: mockGetDeviceType,
   sendSpeak: mockSendSpeak,
   sendAnnouncement: mockSendAnnouncement,
+  sendRadio: mockSendRadio,
+  sendStop: mockSendStop,
 }));
 
 import { handler } from '../src/lambda/announcement';
@@ -40,6 +44,8 @@ beforeEach(() => {
   mockGetDeviceType.mockResolvedValue('A3S5BH2HU6VAYF');
   mockSendSpeak.mockResolvedValue(undefined);
   mockSendAnnouncement.mockResolvedValue(undefined);
+  mockSendRadio.mockResolvedValue(undefined);
+  mockSendStop.mockResolvedValue(undefined);
 });
 
 describe('announcement handler', () => {
@@ -167,5 +173,67 @@ describe('announcement handler', () => {
       '<speak><audio src="https://bucket.s3.amazonaws.com/test.mp3"/></speak>',
       undefined
     );
+  });
+
+  it('prepends introText before audio in SSML', async () => {
+    const mockSend = await getMockSend();
+    mockSend
+      .mockResolvedValueOnce({ Parameter: { Value: fakeCookie } })
+      .mockResolvedValueOnce({ Parameter: { Value: 'DEVICE123' } });
+
+    await handler({
+      message: '',
+      commandType: 'speak',
+      reminderId: 'test',
+      audioUrl: 'https://bucket.s3.amazonaws.com/test.mp3',
+      introText: 'Mensagem de Caio e Igor',
+    });
+
+    expect(mockSendSpeak).toHaveBeenCalledWith(
+      fakeCookie,
+      'DEVICE123',
+      'A3S5BH2HU6VAYF',
+      'CUSTOMER123',
+      '<speak>Mensagem de Caio e Igor <audio src="https://bucket.s3.amazonaws.com/test.mp3"/></speak>',
+      undefined
+    );
+  });
+
+  it('sends radio command with search phrase', async () => {
+    const mockSend = await getMockSend();
+    mockSend
+      .mockResolvedValueOnce({ Parameter: { Value: fakeCookie } })
+      .mockResolvedValueOnce({ Parameter: { Value: 'DEVICE123' } });
+
+    await handler({
+      message: 'JB FM',
+      commandType: 'radio',
+      reminderId: 'radio-morning',
+      volume: 7,
+    });
+
+    expect(mockSendRadio).toHaveBeenCalledWith(
+      fakeCookie, 'DEVICE123', 'A3S5BH2HU6VAYF', 'CUSTOMER123', 'JB FM', 7
+    );
+    expect(mockSendSpeak).not.toHaveBeenCalled();
+  });
+
+  it('sends stop command', async () => {
+    const mockSend = await getMockSend();
+    mockSend
+      .mockResolvedValueOnce({ Parameter: { Value: fakeCookie } })
+      .mockResolvedValueOnce({ Parameter: { Value: 'DEVICE123' } });
+
+    await handler({
+      message: '',
+      commandType: 'stop',
+      reminderId: 'radio-stop',
+    });
+
+    expect(mockSendStop).toHaveBeenCalledWith(
+      fakeCookie, 'DEVICE123', 'A3S5BH2HU6VAYF', 'CUSTOMER123'
+    );
+    expect(mockSendSpeak).not.toHaveBeenCalled();
+    expect(mockSendRadio).not.toHaveBeenCalled();
   });
 });

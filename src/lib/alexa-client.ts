@@ -151,6 +151,83 @@ export async function sendAnnouncement(
 }
 
 /**
+ * Sends a play command for a TuneIn radio station via the entertainment queue API.
+ * The searchPhrase should be a TuneIn guide ID (e.g., "s17492" for JB FM).
+ * If it doesn't look like a guide ID, it's used as-is with a "station" prefix.
+ * If volume is specified, sets volume first via behaviors/preview, then plays.
+ */
+export async function sendRadio(
+  cookie: string,
+  serialNumber: string,
+  deviceType: string,
+  customerId: string,
+  searchPhrase: string,
+  volume?: number
+): Promise<void> {
+  // Set volume first if specified
+  if (volume !== undefined) {
+    const volumeNode = buildVolumeNode(deviceType, serialNumber, customerId, volume);
+    const sequenceJson = JSON.stringify({
+      '@type': 'com.amazon.alexa.behaviors.model.Sequence',
+      startNode: volumeNode,
+    });
+    const payload: SequencePayload = {
+      behaviorId: 'PREVIEW',
+      sequenceJson,
+      status: 'ENABLED',
+    };
+    await alexaRequest('POST', '/api/behaviors/preview', cookie, JSON.stringify(payload));
+  }
+
+  // Build the double-base64-encoded content token for TuneIn
+  const guideId = searchPhrase;
+  const encodedStationId = `["music/tuneIn/stationId","${guideId}"]|{"previousPageId":"TuneIn_SEARCH"}`;
+  const encoding1 = Buffer.from(encodedStationId).toString('base64');
+  const encoding2 = Buffer.from(encoding1).toString('base64');
+  const body = JSON.stringify({ contentToken: `music:${encoding2}` });
+
+  await alexaRequest(
+    'PUT',
+    `/api/entertainment/v1/player/queue?deviceSerialNumber=${serialNumber}&deviceType=${deviceType}`,
+    cookie,
+    body
+  );
+}
+
+/**
+ * Sends a stop command to halt any current playback on the device.
+ */
+export async function sendStop(
+  cookie: string,
+  serialNumber: string,
+  deviceType: string,
+  customerId: string
+): Promise<void> {
+  const stopNode: OperationNode = {
+    '@type': 'com.amazon.alexa.behaviors.model.OpaquePayloadOperationNode',
+    type: 'Alexa.DeviceControls.Stop',
+    operationPayload: {
+      deviceType,
+      deviceSerialNumber: serialNumber,
+      customerId,
+    },
+  };
+
+  const sequenceJson = JSON.stringify({
+    '@type': 'com.amazon.alexa.behaviors.model.Sequence',
+    startNode: stopNode,
+  });
+
+  const payload: SequencePayload = {
+    behaviorId: 'PREVIEW',
+    sequenceJson,
+    status: 'ENABLED',
+  };
+
+  await alexaRequest('POST', '/api/behaviors/preview', cookie, JSON.stringify(payload));
+}
+
+/**
  * Low-level HTTPS request to the Alexa API.
  */
 function alexaRequest(
@@ -177,8 +254,8 @@ function alexaRequest(
       },
     };
 
-    // Extract csrf from cookie for POST requests
-    if (method === 'POST') {
+    // Extract csrf from cookie for POST/PUT requests
+    if (method === 'POST' || method === 'PUT') {
       const csrfMatch = cookie.match(/csrf=([^;]+)/);
       if (csrfMatch) {
         (options.headers as Record<string, string>)['csrf'] = csrfMatch[1];

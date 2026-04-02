@@ -1,40 +1,153 @@
 # Pudding — CLAUDE.md
 
+## Token Efficiency Rules (read first)
+
+- **Do NOT use Explore agents** to understand this project. All structure is documented here.
+- **Do NOT read files you won't modify.** Use Grep to find the exact location, then Read with `offset`/`limit`.
+- **Skip plan mode** for tasks scoped to ≤3 files. Just do it.
+- **Run `/compact`** after finishing each distinct task before starting the next.
+- When you need a pattern example, read ONE file — not all similar files.
+
+---
+
 ## Project Overview
 
-Scheduled voice announcements for Amazon Echo Dot via AWS Lambda + EventBridge Scheduler.
-Uses alexa-remote2 (unofficial) to send speak/announcement commands to a specific Echo Dot.
-Amazon account: amazon.com.br. Region: us-east-2.
+Scheduled voice announcements to an Amazon Echo Dot (Brazil) for dementia care.
+Lambda triggered by EventBridge Scheduler → calls unofficial Alexa API → Echo Dot speaks.
+
+- **Region**: us-east-2
+- **Amazon account**: amazon.com.br (Brazil)
+- **Timezone**: America/Sao_Paulo
+- **Tests**: `pnpm test` (Vitest, 9 tests — must always pass)
+- **Deploy**: `pnpm cdk deploy --require-approval never -c alertEmail=caiotranjan@gmail.com`
+- **Synth only**: `pnpm synth -c alertEmail=caiotranjan@gmail.com`
+
+---
 
 ## Stack
-- **IaC**: AWS CDK (TypeScript)
-- **Runtime**: Node.js 20 (Lambda, ARM64)
-- **Scheduling**: EventBridge Scheduler
-- **Secrets**: SSM Parameter Store (SecureString)
-- **Alexa**: alexa-remote2 + alexa-cookie2
-- **Tests**: Vitest
-- **Package Manager**: pnpm
 
-## Key Files
-- `src/config/reminders.ts` — reminder definitions (cron, message, commandType)
-- `src/lambda/announcement.ts` — sends voice command to Echo Dot
-- `src/lambda/cookie-refresh.ts` — refreshes Amazon session cookie
-- `src/stack/pudding-stack.ts` — CDK infrastructure
-- `scripts/setup.ts` — initial cookie generation + device discovery
+| Layer | Choice |
+|-------|--------|
+| IaC | AWS CDK (TypeScript) |
+| Runtime | Node.js 20, Lambda, ARM64, 256MB |
+| Scheduling | EventBridge Scheduler (NOT classic EventBridge Events) |
+| Secrets | SSM Parameter Store (SecureString) |
+| Alexa API | alexa-remote2 + alexa-cookie2 (unofficial) |
+| Audio | S3 bucket `pudding-audio-051162627683` (public read) |
+| Tests | Vitest |
+| Package mgr | pnpm |
 
-## SSM Parameters
-- `/pudding/alexa-cookie-data` — SecureString, full cookie/registration data
-- `/pudding/device-serial` — String, target Echo Dot serial number
+---
 
-## Commands
-- `pnpm test` — run all tests
-- `pnpm deploy -c alertEmail=...` — deploy CDK stack
-- `pnpm setup` — run initial setup (requires browser)
-- `pnpm synth` — synthesize CloudFormation template
+## File Map
 
-## Brazil-specific Config
-- `amazonPage: 'amazon.com.br'`
-- `alexaServiceHost: 'alexa.amazon.com.br'`
-- `baseAmazonPage: 'amazon.com'`
-- `acceptLanguage: 'pt-BR'`
-- Timezone: America/Sao_Paulo
+```
+src/
+  lambda/
+    announcement.ts       # Handler: receives AnnouncementEvent, calls Alexa API
+    cookie-refresh.ts     # Handler: validates cookie, publishes SNS alert if expired
+  lib/
+    alexa-client.ts       # getCustomerId, getDeviceType, sendSpeak, sendAnnouncement
+    ssm.ts                # getCookieString(), getDeviceSerial()
+    types.ts              # AnnouncementEvent, ALEXA_CONFIG, SSM_PATHS
+  stack/
+    pudding-stack.ts      # CDK stack — all AWS resources
+  config/
+    reminders.ts          # TIMEZONE constant only (reminders now live in portal DB)
+
+scripts/
+  setup.ts                # Interactive: browser login → saves cookie+serial to SSM
+  upload-audio.ts         # CLI: upload MP3 to pudding-audio bucket
+                          # Usage: pnpm upload-audio <file.mp3> <reminder-id>
+
+tests/
+  announcement.test.ts    # 6 tests — speak, announcement, SSM errors, SSML audio
+  cookie-refresh.test.ts  # 3 tests — valid cookie, expired cookie, SSM failure
+```
+
+---
+
+## Key Interfaces
+
+```typescript
+// src/lib/types.ts
+interface AnnouncementEvent {
+  message: string;           // plain text (always present, used for display)
+  commandType: 'speak' | 'announcement';
+  reminderId: string;
+  audioUrl?: string;         // S3 URL — if present, SSML is used instead of TTS
+}
+
+// SSML wrapping (in announcement.ts):
+// const effectiveMessage = audioUrl
+//   ? `<speak><audio src="${audioUrl}"/></speak>`
+//   : message;
+
+// SSM paths
+const SSM_PATHS = {
+  COOKIE: '/pudding/alexa-cookie-data',   // SecureString
+  DEVICE_SERIAL: '/pudding/device-serial', // String
+}
+```
+
+---
+
+## AWS Resources (deployed)
+
+| Resource | Name/ARN |
+|----------|----------|
+| Lambda — announcement | `pudding-announcement` |
+| Lambda — cookie refresh | `pudding-cookie-refresh` |
+| S3 bucket | `pudding-audio-051162627683` (public read, CORS for c4i0apps.com) |
+| SNS topic | `pudding-alerts` — alert email: caiotranjan@gmail.com |
+| EventBridge cookie refresh | `pudding-cookie-refresh` (rate 3 days) |
+| CloudWatch alarm | `pudding-announcement-errors` (fires on Lambda error) |
+| Scheduler IAM role | `PuddingStack-SchedulerRole59E73443-zKJzgwNkPJHN` |
+
+**SSM Parameters (portal uses these):**
+- `/pudding/announcement-fn-arn`
+- `/pudding/scheduler-role-arn`
+- `/pudding/audio-bucket-name`
+
+---
+
+## Reminder Management
+
+**Reminders are NOT in this codebase anymore.** They live in:
+- **Database**: portal PostgreSQL `reminders` table
+- **EventBridge rules**: named `pudding-r-{id}` (e.g. `pudding-r-morning-medication`)
+- **Portal API**: `PUT /api/pudding/reminders` — batch saves all reminder changes
+- **Portal UI**: `https://c4i0apps.com/admin/pudding`
+- **Seed script**: `portal/scripts/seed-reminders.ts`
+
+The 5 default reminders (morning-medication, lunch, afternoon-medication, dinner, night-medication) are already seeded.
+
+`src/config/reminders.ts` now only exports `TIMEZONE` — do not add reminder data back there.
+
+---
+
+## Alexa API Details
+
+All calls go to `alexa.amazon.com.br`. CSRF token extracted from cookie for POST requests.
+
+- **Bootstrap** `GET /api/bootstrap?version=0` → returns `customerId`
+- **Devices** `GET /api/devices-v2/device?cached=true` → list devices, get `deviceType`
+- **Behaviors** `POST /api/behaviors/preview` → send speak or announcement command
+
+`sendSpeak` — `textToSpeak` field accepts plain text OR SSML (`<speak>...</speak>`)
+`sendAnnouncement` — `speak.value` gets SSML, `display.body` always gets plain text
+
+---
+
+## Brazil Config (do not change)
+
+```typescript
+amazonPage: 'amazon.com.br'
+alexaServiceHost: 'alexa.amazon.com.br'
+acceptLanguage: 'pt-BR'
+timezone: 'America/Sao_Paulo'
+```
+
+---
+
+## Last updated: 2026-03-31

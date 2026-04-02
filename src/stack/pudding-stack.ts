@@ -7,9 +7,11 @@ import * as snsSubscriptions from 'aws-cdk-lib/aws-sns-subscriptions';
 import * as scheduler from 'aws-cdk-lib/aws-scheduler';
 import * as cloudwatch from 'aws-cdk-lib/aws-cloudwatch';
 import * as cloudwatchActions from 'aws-cdk-lib/aws-cloudwatch-actions';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import * as path from 'path';
-import { REMINDERS, TIMEZONE } from '../config/reminders';
+import { TIMEZONE } from '../config/reminders';
 import { SSM_PATHS } from '../lib/types';
 
 interface PuddingStackProps extends cdk.StackProps {
@@ -29,6 +31,29 @@ export class PuddingStack extends cdk.Stack {
     alertTopic.addSubscription(
       new snsSubscriptions.EmailSubscription(props.alertEmail)
     );
+
+    // --- Audio Bucket ---
+    const audioBucket = new s3.Bucket(this, 'AudioBucket', {
+      bucketName: `pudding-audio-${this.account}`,
+      blockPublicAccess: new s3.BlockPublicAccess({
+        blockPublicAcls: false,
+        ignorePublicAcls: false,
+        blockPublicPolicy: false,
+        restrictPublicBuckets: false,
+      }),
+      cors: [{
+        allowedMethods: [s3.HttpMethods.PUT, s3.HttpMethods.GET],
+        allowedOrigins: ['https://c4i0apps.com'],
+        allowedHeaders: ['*'],
+      }],
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    audioBucket.addToResourcePolicy(new iam.PolicyStatement({
+      actions: ['s3:GetObject'],
+      resources: [audioBucket.arnForObjects('audio/*')],
+      principals: [new iam.AnyPrincipal()],
+    }));
 
     // --- SSM parameter ARNs (created by scripts/setup.ts, referenced here for IAM) ---
     const ssmCookieArn = `arn:aws:ssm:${this.region}:${this.account}:parameter${SSM_PATHS.cookieData}`;
@@ -100,25 +125,9 @@ export class PuddingStack extends cdk.Stack {
     announcementFn.grantInvoke(schedulerRole);
     cookieRefreshFn.grantInvoke(schedulerRole);
 
-    // --- EventBridge Scheduler: one rule per reminder ---
-    for (const reminder of REMINDERS) {
-      new scheduler.CfnSchedule(this, `Schedule-${reminder.id}`, {
-        name: `pudding-${reminder.id}`,
-        scheduleExpression: reminder.schedule,
-        scheduleExpressionTimezone: TIMEZONE,
-        flexibleTimeWindow: { mode: 'OFF' },
-        target: {
-          arn: announcementFn.functionArn,
-          roleArn: schedulerRole.roleArn,
-          input: JSON.stringify({
-            message: reminder.message,
-            commandType: reminder.commandType,
-            reminderId: reminder.id,
-          }),
-        },
-        state: 'ENABLED',
-      });
-    }
+    // Reminder schedules are managed dynamically via the portal API
+    // (portal/src/lib/scheduler/index.ts) and stored in PostgreSQL.
+    // Seeded via portal/scripts/seed-reminders.ts.
 
     // --- EventBridge Scheduler: cookie refresh every 3 days ---
     new scheduler.CfnSchedule(this, 'CookieRefreshSchedule', {
@@ -150,6 +159,22 @@ export class PuddingStack extends cdk.Stack {
 
     alarm.addAlarmAction(new cloudwatchActions.SnsAction(alertTopic));
 
+    // --- SSM Parameters for Portal ---
+    new ssm.StringParameter(this, 'AnnouncementFnArnParam', {
+      parameterName: '/pudding/announcement-fn-arn',
+      stringValue: announcementFn.functionArn,
+    });
+
+    new ssm.StringParameter(this, 'SchedulerRoleArnParam', {
+      parameterName: '/pudding/scheduler-role-arn',
+      stringValue: schedulerRole.roleArn,
+    });
+
+    new ssm.StringParameter(this, 'AudioBucketNameParam', {
+      parameterName: '/pudding/audio-bucket-name',
+      stringValue: audioBucket.bucketName,
+    });
+
     // --- Outputs ---
     new cdk.CfnOutput(this, 'AnnouncementFunctionArn', {
       value: announcementFn.functionArn,
@@ -162,6 +187,21 @@ export class PuddingStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AlertTopicArn', {
       value: alertTopic.topicArn,
       description: 'SNS Alert Topic ARN',
+    });
+
+    new cdk.CfnOutput(this, 'AudioBucketName', {
+      value: audioBucket.bucketName,
+      description: 'S3 bucket for audio files',
+    });
+
+    new cdk.CfnOutput(this, 'SchedulerRoleArn', {
+      value: schedulerRole.roleArn,
+      description: 'IAM role ARN for EventBridge Scheduler',
+    });
+
+    new cdk.CfnOutput(this, 'AnnouncementFnArn', {
+      value: announcementFn.functionArn,
+      description: 'Announcement Lambda function ARN',
     });
   }
 }
