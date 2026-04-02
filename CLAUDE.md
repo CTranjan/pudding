@@ -18,7 +18,7 @@ Lambda triggered by EventBridge Scheduler → calls unofficial Alexa API → Ech
 - **Region**: us-east-2
 - **Amazon account**: amazon.com.br (Brazil)
 - **Timezone**: America/Sao_Paulo
-- **Tests**: `pnpm test` (Vitest, 9 tests — must always pass)
+- **Tests**: `pnpm test` (Vitest, 14 tests — must always pass)
 - **Deploy**: `pnpm cdk deploy --require-approval never -c alertEmail=caiotranjan@gmail.com`
 - **Synth only**: `pnpm synth -c alertEmail=caiotranjan@gmail.com`
 

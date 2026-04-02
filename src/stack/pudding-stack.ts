@@ -11,7 +11,6 @@ import * as s3 from 'aws-cdk-lib/aws-s3';
 import * as ssm from 'aws-cdk-lib/aws-ssm';
 import { Construct } from 'constructs';
 import * as path from 'path';
-import { TIMEZONE } from '../config/reminders';
 import { SSM_PATHS } from '../lib/types';
 
 interface PuddingStackProps extends cdk.StackProps {
@@ -199,9 +198,5 @@ export class PuddingStack extends cdk.Stack {
       description: 'IAM role ARN for EventBridge Scheduler',
     });
 
-    new cdk.CfnOutput(this, 'AnnouncementFnArn', {
-      value: announcementFn.functionArn,
-      description: 'Announcement Lambda function ARN',
-    });
   }
 }

@@ -1,7 +1,6 @@
 import {
   SSMClient,
   GetParameterCommand,
-  PutParameterCommand,
 } from '@aws-sdk/client-ssm';
 import { SSM_PATHS } from './types';
 
@@ -21,17 +20,6 @@ export async function getCookieString(): Promise<string> {
   }
 
   return value;
-}
-
-export async function saveCookieString(cookie: string): Promise<void> {
-  await ssmClient.send(
-    new PutParameterCommand({
-      Name: SSM_PATHS.cookieData,
-      Value: cookie,
-      Type: 'SecureString',
-      Overwrite: true,
-    })
-  );
 }
 
 export async function getDeviceSerial(): Promise<string> {
