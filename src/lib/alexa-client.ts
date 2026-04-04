@@ -195,6 +195,23 @@ export async function sendRadio(
 }
 
 /**
+ * Gets the current media state (now playing) from the device.
+ * Returns provider info, content ID, title, etc.
+ */
+export async function getNowPlaying(
+  cookie: string,
+  serialNumber: string,
+  deviceType: string
+): Promise<Record<string, unknown>> {
+  const data = await alexaRequest(
+    'GET',
+    `/api/np/player?deviceSerialNumber=${serialNumber}&deviceType=${deviceType}&screenWidth=1920`,
+    cookie
+  );
+  return JSON.parse(data);
+}
+
+/**
  * Sends a stop command to halt any current playback on the device.
  */
 export async function sendStop(

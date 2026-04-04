@@ -29,7 +29,7 @@ export interface CookieData {
 
 export interface AnnouncementEvent {
   message: string;
-  commandType: 'speak' | 'announcement' | 'radio' | 'stop';
+  commandType: 'speak' | 'announcement' | 'radio' | 'stop' | 'now-playing';
   reminderId: string;
   audioUrl?: string;
   /** Optional volume level (1–10) to set before speaking. If omitted, device volume is unchanged. */
