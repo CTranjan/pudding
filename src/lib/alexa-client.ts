@@ -2,6 +2,14 @@ import * as https from 'https';
 
 const ALEXA_HOST = 'alexa.amazon.com.br';
 
+/**
+ * Strips diacritics from text so Alexa TTS pronounces Portuguese correctly.
+ * E.g. "almoço" → "almoco", "ação" → "acao"
+ */
+function normalizeForTTS(text: string): string {
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+
 interface SequencePayload {
   behaviorId: string;
   sequenceJson: string;
@@ -28,11 +36,15 @@ function buildVolumeNode(deviceType: string, serialNumber: string, customerId: s
   };
 }
 
-function buildStartNode(mainNode: OperationNode, volumeNode?: OperationNode): unknown {
-  if (!volumeNode) return mainNode;
+function buildStartNode(mainNode: OperationNode, volumeNode?: OperationNode, restoreVolumeNode?: OperationNode): unknown {
+  const nodes: OperationNode[] = [];
+  if (volumeNode) nodes.push(volumeNode);
+  nodes.push(mainNode);
+  if (restoreVolumeNode) nodes.push(restoreVolumeNode);
+  if (nodes.length === 1) return mainNode;
   return {
     '@type': 'com.amazon.alexa.behaviors.model.SerialNode',
-    nodesToExecute: [volumeNode, mainNode],
+    nodesToExecute: nodes,
   };
 }
 
@@ -75,7 +87,8 @@ export async function sendSpeak(
   deviceType: string,
   customerId: string,
   message: string,
-  volume?: number
+  volume?: number,
+  restoreVolume?: number
 ): Promise<void> {
   const speakNode: OperationNode = {
     '@type': 'com.amazon.alexa.behaviors.model.OpaquePayloadOperationNode',
@@ -85,13 +98,17 @@ export async function sendSpeak(
       deviceSerialNumber: serialNumber,
       locale: 'pt-BR',
       customerId,
-      textToSpeak: message,
+      textToSpeak: normalizeForTTS(message),
     },
   };
 
   const sequenceJson = JSON.stringify({
     '@type': 'com.amazon.alexa.behaviors.model.Sequence',
-    startNode: buildStartNode(speakNode, volume !== undefined ? buildVolumeNode(deviceType, serialNumber, customerId, volume) : undefined),
+    startNode: buildStartNode(
+      speakNode,
+      volume !== undefined ? buildVolumeNode(deviceType, serialNumber, customerId, volume) : undefined,
+      restoreVolume !== undefined ? buildVolumeNode(deviceType, serialNumber, customerId, restoreVolume) : undefined,
+    ),
   });
 
   const payload: SequencePayload = {
@@ -114,7 +131,8 @@ export async function sendAnnouncement(
   customerId: string,
   message: string,
   speakOverride?: string,
-  volume?: number
+  volume?: number,
+  restoreVolume?: number
 ): Promise<void> {
   const announcementNode: OperationNode = {
     '@type': 'com.amazon.alexa.behaviors.model.OpaquePayloadOperationNode',
@@ -126,7 +144,7 @@ export async function sendAnnouncement(
         {
           locale: 'pt-BR',
           display: { title: 'Pudding', body: message },
-          speak: { type: speakOverride ? 'ssml' : 'text', value: speakOverride || message },
+          speak: { type: speakOverride ? 'ssml' : 'text', value: speakOverride || normalizeForTTS(message) },
         },
       ],
       target: {
@@ -138,7 +156,84 @@ export async function sendAnnouncement(
 
   const sequenceJson = JSON.stringify({
     '@type': 'com.amazon.alexa.behaviors.model.Sequence',
-    startNode: buildStartNode(announcementNode, volume !== undefined ? buildVolumeNode(deviceType, serialNumber, customerId, volume) : undefined),
+    startNode: buildStartNode(
+      announcementNode,
+      volume !== undefined ? buildVolumeNode(deviceType, serialNumber, customerId, volume) : undefined,
+      restoreVolume !== undefined ? buildVolumeNode(deviceType, serialNumber, customerId, restoreVolume) : undefined,
+    ),
+  });
+
+  const payload: SequencePayload = {
+    behaviorId: 'PREVIEW',
+    sequenceJson,
+    status: 'ENABLED',
+  };
+
+  await alexaRequest('POST', '/api/behaviors/preview', cookie, JSON.stringify(payload));
+}
+
+/**
+ * Sends an announcement with chime + intro text, followed by audio playback.
+ * Uses a SerialNode to chain AlexaAnnouncement (chime + TTS) → Alexa.Speak (audio SSML).
+ * This is needed because AlexaAnnouncement does not support <audio> SSML tags.
+ */
+export async function sendAnnouncementWithAudio(
+  cookie: string,
+  serialNumber: string,
+  deviceType: string,
+  customerId: string,
+  displayText: string,
+  introText: string | undefined,
+  audioUrl: string,
+  volume?: number,
+  restoreVolume?: number
+): Promise<void> {
+  const announcementNode: OperationNode = {
+    '@type': 'com.amazon.alexa.behaviors.model.OpaquePayloadOperationNode',
+    type: 'AlexaAnnouncement',
+    operationPayload: {
+      expireAfter: 'PT5S',
+      customerId,
+      content: [
+        {
+          locale: 'pt-BR',
+          display: { title: 'Pudding', body: displayText || 'Audio' },
+          speak: { type: 'text', value: introText ? normalizeForTTS(introText) : ' ' },
+        },
+      ],
+      target: {
+        customerId,
+        devices: [{ deviceSerialNumber: serialNumber, deviceTypeId: deviceType }],
+      },
+    },
+  };
+
+  const audioNode: OperationNode = {
+    '@type': 'com.amazon.alexa.behaviors.model.OpaquePayloadOperationNode',
+    type: 'Alexa.Speak',
+    operationPayload: {
+      deviceType,
+      deviceSerialNumber: serialNumber,
+      locale: 'pt-BR',
+      customerId,
+      textToSpeak: `<speak><audio src="${audioUrl}"/></speak>`,
+    },
+  };
+
+  const nodes: OperationNode[] = [];
+  if (volume !== undefined) nodes.push(buildVolumeNode(deviceType, serialNumber, customerId, volume));
+  nodes.push(announcementNode);
+  nodes.push(audioNode);
+  if (restoreVolume !== undefined) nodes.push(buildVolumeNode(deviceType, serialNumber, customerId, restoreVolume));
+
+  const startNode = nodes.length === 1 ? nodes[0] : {
+    '@type': 'com.amazon.alexa.behaviors.model.SerialNode',
+    nodesToExecute: nodes,
+  };
+
+  const sequenceJson = JSON.stringify({
+    '@type': 'com.amazon.alexa.behaviors.model.Sequence',
+    startNode,
   });
 
   const payload: SequencePayload = {

@@ -18,7 +18,7 @@ Lambda triggered by EventBridge Scheduler → calls unofficial Alexa API → Ech
 - **Region**: us-east-2
 - **Amazon account**: amazon.com.br (Brazil)
 - **Timezone**: America/Sao_Paulo
-- **Tests**: `pnpm test` (Vitest, 14 tests — must always pass)
+- **Tests**: `pnpm test` (Vitest, 15 tests — must always pass)
 - **Deploy**: `pnpm cdk deploy --require-approval never -c alertEmail=caiotranjan@gmail.com`
 - **Synth only**: `pnpm synth -c alertEmail=caiotranjan@gmail.com`
 
@@ -47,7 +47,7 @@ src/
     announcement.ts       # Handler: receives AnnouncementEvent, calls Alexa API
     cookie-refresh.ts     # Handler: validates cookie, publishes SNS alert if expired
   lib/
-    alexa-client.ts       # getCustomerId, getDeviceType, sendSpeak, sendAnnouncement
+    alexa-client.ts       # getCustomerId, getDeviceType, sendSpeak, sendAnnouncement, sendAnnouncementWithAudio, sendRadio, sendStop, getNowPlaying
     ssm.ts                # getCookieString(), getDeviceSerial()
     types.ts              # AnnouncementEvent, ALEXA_CONFIG, SSM_PATHS
   stack/
@@ -61,7 +61,7 @@ scripts/
                           # Usage: pnpm upload-audio <file.mp3> <reminder-id>
 
 tests/
-  announcement.test.ts    # 6 tests — speak, announcement, SSM errors, SSML audio
+  announcement.test.ts    # 12 tests — speak, announcement, audio, radio, stop, volume, SSM errors
   cookie-refresh.test.ts  # 3 tests — valid cookie, expired cookie, SSM failure
 ```
 
@@ -72,16 +72,14 @@ tests/
 ```typescript
 // src/lib/types.ts
 interface AnnouncementEvent {
-  message: string;           // plain text (always present, used for display)
-  commandType: 'speak' | 'announcement';
+  message: string;              // plain text (always present, used for display)
+  commandType: 'speak' | 'announcement' | 'radio' | 'stop' | 'now-playing';
   reminderId: string;
-  audioUrl?: string;         // S3 URL — if present, SSML is used instead of TTS
+  audioUrl?: string;            // S3 URL — if present, SSML <audio> is used instead of TTS
+  volume?: number;              // 1–10, sets device volume before speaking
+  restoreVolume?: number;       // 1–10, restores volume after speaking
+  introText?: string;           // spoken before audio plays (only with audioUrl)
 }
-
-// SSML wrapping (in announcement.ts):
-// const effectiveMessage = audioUrl
-//   ? `<speak><audio src="${audioUrl}"/></speak>`
-//   : message;
 
 // SSM paths
 const SSM_PATHS = {
@@ -150,4 +148,4 @@ timezone: 'America/Sao_Paulo'
 
 ---
 
-## Last updated: 2026-03-31
+## Last updated: 2026-04-06

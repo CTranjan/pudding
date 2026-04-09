@@ -34,6 +34,8 @@ export interface AnnouncementEvent {
   audioUrl?: string;
   /** Optional volume level (1–10) to set before speaking. If omitted, device volume is unchanged. */
   volume?: number;
+  /** Optional volume level (1–10) to restore after speaking. Useful to avoid loud music resuming. */
+  restoreVolume?: number;
   /** Optional intro text spoken by Alexa before audio plays (only used when audioUrl is set) */
   introText?: string;
 }

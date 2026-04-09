@@ -2,6 +2,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { execSync } from 'child_process';
 
 const REGION = process.env.AWS_REGION || 'us-east-2';
 
@@ -28,7 +29,26 @@ async function main() {
     process.exit(1);
   }
 
-  const fileBuffer = fs.readFileSync(filePath);
+  // Normalize audio loudness to match Alexa TTS level (~-14 LUFS)
+  let normalizedPath: string | null = null;
+  try {
+    execSync('ffmpeg -version', { stdio: 'ignore' });
+    normalizedPath = filePath.replace(/\.mp3$/, '.normalized.mp3');
+    console.log('🔊 Normalizing audio loudness...');
+    execSync(
+      `ffmpeg -y -i "${filePath}" ` +
+      `-af "acompressor=threshold=-20dB:ratio=4:attack=5:release=50:makeup=8,alimiter=limit=0.95:level=false" ` +
+      `-ar 48000 -b:a 128k "${normalizedPath}"`,
+      { stdio: 'pipe' }
+    );
+    console.log('   ✅ Audio normalized to ~-14 LUFS');
+  } catch {
+    console.warn('⚠️  ffmpeg not available — uploading without normalization');
+    normalizedPath = null;
+  }
+
+  const uploadPath = normalizedPath && fs.existsSync(normalizedPath) ? normalizedPath : filePath;
+  const fileBuffer = fs.readFileSync(uploadPath);
   const fileSizeKB = Math.round(fileBuffer.length / 1024);
 
   // Warn if file is likely longer than 90 seconds (rough estimate: 48kbps = 6KB/s)
@@ -58,6 +78,11 @@ async function main() {
     Body: fileBuffer,
     ContentType: 'audio/mpeg',
   }));
+
+  // Clean up temp normalized file
+  if (normalizedPath && fs.existsSync(normalizedPath)) {
+    fs.unlinkSync(normalizedPath);
+  }
 
   const publicUrl = `https://${bucketName}.s3.${REGION}.amazonaws.com/${key}`;
   console.log(`✅ Upload complete!`);

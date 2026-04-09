@@ -1,9 +1,9 @@
 import { AnnouncementEvent } from '../lib/types';
 import { getCookieString, getDeviceSerial } from '../lib/ssm';
-import { getCustomerId, getDeviceType, sendSpeak, sendAnnouncement, sendRadio, sendStop, getNowPlaying } from '../lib/alexa-client';
+import { getCustomerId, getDeviceType, sendSpeak, sendAnnouncement, sendAnnouncementWithAudio, sendRadio, sendStop, getNowPlaying } from '../lib/alexa-client';
 
 export const handler = async (event: AnnouncementEvent): Promise<void | Record<string, unknown>> => {
-  const { message, commandType, reminderId, audioUrl, volume, introText } = event;
+  const { message, commandType, reminderId, audioUrl, volume, restoreVolume, introText } = event;
 
   console.log(JSON.stringify({
     action: 'announcement_start',
@@ -43,9 +43,14 @@ export const handler = async (event: AnnouncementEvent): Promise<void | Record<s
   } else if (commandType === 'stop') {
     await sendStop(cookie, serialNumber, deviceType, customerId);
   } else if (commandType === 'announcement') {
-    await sendAnnouncement(cookie, serialNumber, deviceType, customerId, message, audioUrl ? effectiveMessage : undefined, volume);
+    if (audioUrl) {
+      // AlexaAnnouncement doesn't support <audio> SSML; use SerialNode: chime+intro → audio
+      await sendAnnouncementWithAudio(cookie, serialNumber, deviceType, customerId, message, introText, audioUrl, volume, restoreVolume);
+    } else {
+      await sendAnnouncement(cookie, serialNumber, deviceType, customerId, message, undefined, volume, restoreVolume);
+    }
   } else {
-    await sendSpeak(cookie, serialNumber, deviceType, customerId, effectiveMessage, volume);
+    await sendSpeak(cookie, serialNumber, deviceType, customerId, effectiveMessage, volume, restoreVolume);
   }
 
   console.log(JSON.stringify({
