@@ -45,11 +45,12 @@ Lambda triggered by EventBridge Scheduler → calls unofficial Alexa API → Ech
 src/
   lambda/
     announcement.ts       # Handler: receives AnnouncementEvent, calls Alexa API
-    cookie-refresh.ts     # Handler: validates cookie, publishes SNS alert if expired
+    cookie-refresh.ts     # Handler: refreshes cookie via stored refresh token, writes new cookie+registration to SSM
   lib/
     alexa-client.ts       # getCustomerId, getDeviceType, sendSpeak, sendAnnouncement, sendAnnouncementWithAudio, sendRadio, sendStop, getNowPlaying
-    ssm.ts                # getCookieString(), getDeviceSerial()
-    types.ts              # AnnouncementEvent, ALEXA_CONFIG, SSM_PATHS
+    alexa-cookie-refresh.ts # refreshRegistration() — promise wrapper around alexa-cookie2.refreshAlexaCookie
+    ssm.ts                # getCookieString(), getDeviceSerial(), getRegistrationData(), putCookieString(), putRegistrationData()
+    types.ts              # AnnouncementEvent, CookieData, ALEXA_CONFIG, SSM_PATHS
   stack/
     pudding-stack.ts      # CDK stack — all AWS resources
   config/
@@ -83,8 +84,9 @@ interface AnnouncementEvent {
 
 // SSM paths
 const SSM_PATHS = {
-  COOKIE: '/pudding/alexa-cookie-data',   // SecureString
-  DEVICE_SERIAL: '/pudding/device-serial', // String
+  COOKIE: '/pudding/alexa-cookie-data',                // SecureString — raw cookie string (used by announcement Lambda)
+  DEVICE_SERIAL: '/pudding/device-serial',             // String
+  REGISTRATION: '/pudding/alexa-registration-data',    // SecureString — full alexa-cookie2 bundle incl. refreshToken (used by cookie-refresh Lambda)
 }
 ```
 
@@ -148,4 +150,27 @@ timezone: 'America/Sao_Paulo'
 
 ---
 
-## Last updated: 2026-04-06
+---
+
+## Cookie lifecycle (2026-04-13)
+
+`pudding-cookie-refresh` Lambda runs every 3 days. It reads `SSM_PATHS.REGISTRATION`,
+calls `alexa-cookie2.refreshAlexaCookie()` to exchange the stored refresh token for a
+fresh cookie, and writes the new cookie + rotated registration back to SSM. No human
+interaction needed — unless the refresh token itself is revoked (SNS alert then).
+
+**Bootstrap (one-time, needed after refresh token revocation)**:
+```
+# on laptop
+ssh -L 8443:localhost:8443 ubuntu@<ec2>
+
+# on EC2
+cd /home/ubuntu/projects/pudding && pnpm setup
+
+# on laptop browser
+open https://127.0.0.1:8443/   # accept self-signed cert, log in, done
+```
+
+---
+
+## Last updated: 2026-04-13
