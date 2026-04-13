@@ -1,8 +1,9 @@
 import {
   SSMClient,
   GetParameterCommand,
+  PutParameterCommand,
 } from '@aws-sdk/client-ssm';
-import { SSM_PATHS } from './types';
+import { SSM_PATHS, CookieData } from './types';
 
 const ssmClient = new SSMClient({});
 
@@ -35,4 +36,42 @@ export async function getDeviceSerial(): Promise<string> {
   }
 
   return value;
+}
+
+export async function getRegistrationData(): Promise<CookieData> {
+  const result = await ssmClient.send(
+    new GetParameterCommand({
+      Name: SSM_PATHS.registrationData,
+      WithDecryption: true,
+    })
+  );
+
+  const value = result.Parameter?.Value;
+  if (!value) {
+    throw new Error(`SSM parameter ${SSM_PATHS.registrationData} is empty or not found`);
+  }
+
+  return JSON.parse(value) as CookieData;
+}
+
+export async function putCookieString(cookie: string): Promise<void> {
+  await ssmClient.send(
+    new PutParameterCommand({
+      Name: SSM_PATHS.cookieData,
+      Value: cookie,
+      Type: 'SecureString',
+      Overwrite: true,
+    })
+  );
+}
+
+export async function putRegistrationData(data: CookieData): Promise<void> {
+  await ssmClient.send(
+    new PutParameterCommand({
+      Name: SSM_PATHS.registrationData,
+      Value: JSON.stringify(data),
+      Type: 'SecureString',
+      Overwrite: true,
+    })
+  );
 }

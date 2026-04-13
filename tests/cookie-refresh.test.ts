@@ -1,29 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockSnsSend, mockGetCustomerId } = vi.hoisted(() => ({
+const { mockSnsSend, mockRefresh } = vi.hoisted(() => ({
   mockSnsSend: vi.fn(),
-  mockGetCustomerId: vi.fn(),
+  mockRefresh: vi.fn(),
 }));
 
-// Mock AWS SSM
 vi.mock('@aws-sdk/client-ssm', () => {
   const mockSend = vi.fn();
   return {
     SSMClient: vi.fn(() => ({ send: mockSend })),
-    GetParameterCommand: vi.fn((input: Record<string, unknown>) => ({ input })),
+    GetParameterCommand: vi.fn((input: Record<string, unknown>) => ({ __type: 'get', input })),
+    PutParameterCommand: vi.fn((input: Record<string, unknown>) => ({ __type: 'put', input })),
     __mockSend: mockSend,
   };
 });
 
-// Mock AWS SNS
 vi.mock('@aws-sdk/client-sns', () => ({
   SNSClient: vi.fn(() => ({ send: mockSnsSend })),
   PublishCommand: vi.fn((input: Record<string, unknown>) => ({ input })),
 }));
 
-// Mock alexa-client
-vi.mock('../src/lib/alexa-client', () => ({
-  getCustomerId: mockGetCustomerId,
+vi.mock('../src/lib/alexa-cookie-refresh', () => ({
+  refreshRegistration: mockRefresh,
 }));
 
 process.env.SNS_TOPIC_ARN = 'arn:aws:sns:us-east-2:123456789:pudding-alerts';
@@ -35,31 +33,64 @@ const getMockSend = async () => {
   return mod.__mockSend;
 };
 
-const fakeCookie = 'session-id=123; at-acbbr=Atza|abc';
+const fakeRegistration = {
+  localCookie: 'session-id=OLD; csrf=111',
+  csrf: '111',
+  refreshToken: 'Atnr|OLD',
+  deviceSerial: 'abc',
+  deviceId: 'def',
+  frc: 'frc',
+  'map-md': 'map',
+  tokenDate: 1,
+  amazonPage: 'amazon.com.br',
+  loginCookie: '',
+  macDms: { device_private_key: 'k', adp_token: 't' },
+};
+
+const refreshedRegistration = {
+  ...fakeRegistration,
+  localCookie: 'session-id=NEW; csrf=222',
+  csrf: '222',
+  refreshToken: 'Atnr|NEW',
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockSnsSend.mockResolvedValue({});
-  mockGetCustomerId.mockResolvedValue('CUSTOMER123');
 });
 
 describe('cookie-refresh handler', () => {
-  it('validates cookie by calling bootstrap API', async () => {
+  it('refreshes cookie and writes both params back to SSM', async () => {
     const mockSend = await getMockSend();
-    mockSend.mockResolvedValueOnce({ Parameter: { Value: fakeCookie } });
+    // 1st call: GetParameter for registration data
+    mockSend.mockResolvedValueOnce({ Parameter: { Value: JSON.stringify(fakeRegistration) } });
+    // 2nd call: PutParameter for cookie string
+    mockSend.mockResolvedValueOnce({});
+    // 3rd call: PutParameter for registration data
+    mockSend.mockResolvedValueOnce({});
+    mockRefresh.mockResolvedValue(refreshedRegistration);
 
     await handler();
 
-    expect(mockGetCustomerId).toHaveBeenCalledWith(fakeCookie);
+    expect(mockRefresh).toHaveBeenCalledWith(fakeRegistration);
+    expect(mockSend).toHaveBeenCalledTimes(3);
+
+    const putCalls = mockSend.mock.calls
+      .map((c) => c[0] as { __type?: string; input?: Record<string, unknown> })
+      .filter((c) => c.__type === 'put');
+    expect(putCalls).toHaveLength(2);
+    expect(putCalls[0].input?.Value).toBe('session-id=NEW; csrf=222');
+    expect(JSON.parse(putCalls[1].input?.Value as string).refreshToken).toBe('Atnr|NEW');
+
     expect(mockSnsSend).not.toHaveBeenCalled();
   });
 
-  it('publishes SNS alert when cookie is invalid', async () => {
+  it('publishes SNS alert when refresh fails', async () => {
     const mockSend = await getMockSend();
-    mockSend.mockResolvedValueOnce({ Parameter: { Value: fakeCookie } });
-    mockGetCustomerId.mockRejectedValue(new Error('Alexa API 401'));
+    mockSend.mockResolvedValueOnce({ Parameter: { Value: JSON.stringify(fakeRegistration) } });
+    mockRefresh.mockRejectedValue(new Error('refresh token expired'));
 
-    await expect(handler()).rejects.toThrow('Alexa API 401');
+    await expect(handler()).rejects.toThrow('refresh token expired');
     expect(mockSnsSend).toHaveBeenCalledTimes(1);
   });
 
@@ -68,6 +99,17 @@ describe('cookie-refresh handler', () => {
     mockSend.mockRejectedValueOnce(new Error('SSM access denied'));
 
     await expect(handler()).rejects.toThrow('SSM access denied');
+    expect(mockSnsSend).toHaveBeenCalledTimes(1);
+    expect(mockRefresh).not.toHaveBeenCalled();
+  });
+
+  it('publishes SNS alert when SSM writeback fails', async () => {
+    const mockSend = await getMockSend();
+    mockSend.mockResolvedValueOnce({ Parameter: { Value: JSON.stringify(fakeRegistration) } });
+    mockSend.mockRejectedValueOnce(new Error('PutParameter denied'));
+    mockRefresh.mockResolvedValue(refreshedRegistration);
+
+    await expect(handler()).rejects.toThrow('PutParameter denied');
     expect(mockSnsSend).toHaveBeenCalledTimes(1);
   });
 });
