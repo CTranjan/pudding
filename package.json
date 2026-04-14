@@ -11,7 +11,7 @@
     "cdk": "cdk",
     "synth": "cdk synth",
     "deploy": "cdk deploy",
-    "setup": "npx ts-node scripts/setup.ts",
+    "bootstrap": "npx ts-node scripts/setup.ts",
     "upload-audio": "npx ts-node scripts/upload-audio.ts"
   },
   "dependencies": {

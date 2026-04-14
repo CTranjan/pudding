@@ -50,5 +50,4 @@ export const ALEXA_CONFIG = {
 export const SSM_PATHS = {
   cookieData: '/pudding/alexa-cookie-data',
   deviceSerial: '/pudding/device-serial',
-  registrationData: '/pudding/alexa-registration-data',
 } as const;

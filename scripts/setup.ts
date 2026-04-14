@@ -1,31 +1,27 @@
 /**
- * Pudding Setup Script — proxy-based bootstrap
+ * Pudding Setup Script — manual cookie paste
  *
- *   npx ts-node scripts/setup.ts
+ *   pnpm run bootstrap   (or: npx ts-node scripts/setup.ts)
  *
  * How it works:
- * 1. We start a local HTTPS proxy on port 8443 (via alexa-cookie2).
- * 2. You access it through an SSH tunnel from your laptop:
- *      ssh -L 8443:localhost:8443 ubuntu@<ec2>
- *    Then open https://127.0.0.1:8443/ in your browser (accept the self-signed cert).
- * 3. You log in to amazon.com.br normally (OTP/2FA if prompted).
- * 4. The proxy captures the full registration bundle (incl. a long-lived refresh token).
- * 5. The script then lists your Echo devices, you pick one, and everything
- *    is saved to SSM. From then on, pudding-cookie-refresh Lambda renews the
- *    cookie unattended every 3 days — no more manual cookie pasting.
+ * 1. You log into alexa.amazon.com.br in your browser
+ * 2. Copy the full Cookie header from DevTools > Network tab
+ * 3. Paste it here — the script calls the Alexa API directly to list devices
+ * 4. You select the target Echo Dot
+ * 5. The script saves the cookie and device serial to SSM
+ *
+ * Note: automated refresh via alexa-cookie2 was tried but Amazon's anti-fraud
+ * blocks device registration from EC2 IPs. Manual paste every ~7-14 days
+ * remains the reliable option. The pudding-cookie-refresh Lambda validates
+ * the cookie every 3 days and SNS-alerts before announcements start failing.
  */
 
 import * as readline from 'readline';
 import * as https from 'https';
 import { SSMClient, PutParameterCommand } from '@aws-sdk/client-ssm';
-import { SSM_PATHS, ALEXA_CONFIG, CookieData } from '../src/lib/types';
-
-const alexaCookie = require('alexa-cookie2');
+import { SSM_PATHS, ALEXA_CONFIG } from '../src/lib/types';
 
 const AWS_REGION = process.env.AWS_REGION || 'us-east-2';
-const PROXY_PORT = 8443;
-const PROXY_OWN_IP = '127.0.0.1';
-
 const ssmClient = new SSMClient({ region: AWS_REGION });
 
 function ask(question: string): Promise<string> {
@@ -89,54 +85,7 @@ function fetchDevices(cookieString: string): Promise<AlexaDevice[]> {
   });
 }
 
-function runProxyLogin(): Promise<CookieData> {
-  return new Promise((resolve, reject) => {
-    console.log('\n🌐 Starting Alexa proxy server...\n');
-    console.log(`   1. On your laptop, open an SSH tunnel:`);
-    console.log(`      ssh -L ${PROXY_PORT}:localhost:${PROXY_PORT} ubuntu@<this-ec2-host>\n`);
-    console.log(`   2. In your laptop browser, open:`);
-    console.log(`      https://${PROXY_OWN_IP}:${PROXY_PORT}/`);
-    console.log(`      (accept the self-signed cert warning)\n`);
-    console.log(`   3. Log in to amazon.com.br normally (OTP/2FA if prompted).`);
-    console.log(`   4. When the proxy succeeds, you'll see a success page.\n`);
-    console.log('⏳ Waiting for login...\n');
-
-    alexaCookie.generateAlexaCookie(
-      undefined,
-      undefined,
-      {
-        logger: (msg: string) => process.stdout.write(`   [proxy] ${msg}\n`),
-        proxyOnly: true,
-        setupProxy: true,
-        proxyOwnIp: PROXY_OWN_IP,
-        proxyPort: PROXY_PORT,
-        proxyListenBind: '0.0.0.0',
-        amazonPage: ALEXA_CONFIG.amazonPage,
-        acceptLanguage: ALEXA_CONFIG.acceptLanguage,
-        baseAmazonPage: ALEXA_CONFIG.baseAmazonPage,
-        deviceAppName: 'Pudding',
-      },
-      (err: Error | null, result: CookieData | undefined) => {
-        try {
-          alexaCookie.stopProxyServer();
-        } catch {
-          // ignore
-        }
-        if (err) return reject(err);
-        if (!result || !result.localCookie) {
-          return reject(new Error('Proxy returned no cookie — login likely incomplete'));
-        }
-        resolve(result);
-      }
-    );
-  });
-}
-
-async function saveToSSM(
-  cookieString: string,
-  registrationData: CookieData,
-  deviceSerial: string,
-): Promise<void> {
+async function saveToSSM(cookieString: string, deviceSerial: string): Promise<void> {
   console.log('\n📦 Saving to AWS SSM Parameter Store...');
 
   await ssmClient.send(
@@ -151,16 +100,6 @@ async function saveToSSM(
 
   await ssmClient.send(
     new PutParameterCommand({
-      Name: SSM_PATHS.registrationData,
-      Value: JSON.stringify(registrationData),
-      Type: 'SecureString',
-      Overwrite: true,
-    })
-  );
-  console.log(`   ✅ ${SSM_PATHS.registrationData} (SecureString)`);
-
-  await ssmClient.send(
-    new PutParameterCommand({
       Name: SSM_PATHS.deviceSerial,
       Value: deviceSerial,
       Type: 'String',
@@ -171,13 +110,25 @@ async function saveToSSM(
 }
 
 async function main(): Promise<void> {
-  console.log('🍮 Pudding Setup — proxy bootstrap\n');
+  console.log('🍮 Pudding Setup\n');
 
-  const registration = await runProxyLogin();
-  console.log(`\n✅ Login successful. Got refresh token (${registration.refreshToken.length} chars).\n`);
+  console.log('Step 1: Get your Alexa cookie\n');
+  console.log('  1. Go to www.amazon.com.br and make sure you are logged in');
+  console.log('  2. Navigate to: https://alexa.amazon.com.br/api/devices-v2/device?cached=true');
+  console.log('  3. Press F12 > Network tab > refresh the page');
+  console.log('  4. Click the first request > Request Headers > copy the Cookie: value\n');
+
+  const cookieString = await ask('Paste your cookie string here: ');
+
+  if (!cookieString || cookieString.length < 100) {
+    console.error('❌ That does not look like a valid cookie string.');
+    process.exit(1);
+  }
+
+  console.log(`\n✅ Cookie received (${cookieString.length} characters)\n`);
 
   console.log('🔍 Discovering Echo devices...\n');
-  const devices = await fetchDevices(registration.localCookie);
+  const devices = await fetchDevices(cookieString);
 
   if (devices.length === 0) {
     console.error('❌ No Echo devices found on this account.');
@@ -202,11 +153,10 @@ async function main(): Promise<void> {
   const selectedDevice = devices[deviceIndex];
   console.log(`\n📍 Selected: ${selectedDevice.accountName} (${selectedDevice.serialNumber})`);
 
-  await saveToSSM(registration.localCookie, registration, selectedDevice.serialNumber);
+  await saveToSSM(cookieString, selectedDevice.serialNumber);
 
-  console.log('\n🎉 Bootstrap complete!');
-  console.log('\nFrom now on, pudding-cookie-refresh Lambda will auto-renew every 3 days.');
-  console.log('Test the announcement Lambda:');
+  console.log('\n🎉 Setup complete!');
+  console.log('\nTest the announcement Lambda:');
   console.log('  aws lambda invoke --function-name pudding-announcement \\');
   console.log('    --payload \'{"message":"Teste!","commandType":"speak","reminderId":"test"}\' \\');
   console.log('    --cli-binary-format raw-in-base64-out --region us-east-2 out.json');

@@ -57,7 +57,6 @@ export class PuddingStack extends cdk.Stack {
     // --- SSM parameter ARNs (created by scripts/setup.ts, referenced here for IAM) ---
     const ssmCookieArn = `arn:aws:ssm:${this.region}:${this.account}:parameter${SSM_PATHS.cookieData}`;
     const ssmDeviceArn = `arn:aws:ssm:${this.region}:${this.account}:parameter${SSM_PATHS.deviceSerial}`;
-    const ssmRegistrationArn = `arn:aws:ssm:${this.region}:${this.account}:parameter${SSM_PATHS.registrationData}`;
 
     // --- Announcement Lambda ---
     const announcementFn = new nodejs.NodejsFunction(this, 'AnnouncementFn', {
@@ -91,7 +90,7 @@ export class PuddingStack extends cdk.Stack {
       entry: path.join(__dirname, '..', 'lambda', 'cookie-refresh.ts'),
       handler: 'handler',
       runtime: lambda.Runtime.NODEJS_20_X,
-      memorySize: 512,
+      memorySize: 256,
       timeout: cdk.Duration.seconds(60),
       architecture: lambda.Architecture.ARM_64,
       environment: {
@@ -101,22 +100,13 @@ export class PuddingStack extends cdk.Stack {
         minify: true,
         sourceMap: true,
         target: 'node20',
-        // alexa-cookie2 (and its transitive express/http-proxy deps) don't
-        // bundle cleanly with esbuild — ship as installed node_modules instead.
-        nodeModules: ['alexa-cookie2'],
       },
     });
 
     cookieRefreshFn.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ['ssm:GetParameter'],
-        resources: [ssmCookieArn, ssmRegistrationArn],
-      })
-    );
-    cookieRefreshFn.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ['ssm:PutParameter'],
-        resources: [ssmCookieArn, ssmRegistrationArn],
+        resources: [ssmCookieArn],
       })
     );
     alertTopic.grantPublish(cookieRefreshFn);

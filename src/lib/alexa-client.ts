@@ -49,6 +49,62 @@ function buildStartNode(mainNode: OperationNode, volumeNode?: OperationNode, res
 }
 
 /**
+ * Validates the cookie by POSTing to /api/behaviors/preview — the same
+ * CSRF-gated endpoint announcements use. A stale session returns 401/403
+ * even when GET /api/bootstrap still returns 200, so this is the reliable
+ * way to detect expiry before the next real announcement fails.
+ *
+ * Success: resolves on any non-auth response (2xx, 400, 5xx — Alexa accepted
+ *          the CSRF). Failure: rejects only on 401/403.
+ */
+export function validateCookiePost(cookie: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const csrfMatch = cookie.match(/csrf=([^;]+)/);
+    if (!csrfMatch) {
+      return reject(new Error('Cookie has no csrf token — likely malformed or empty'));
+    }
+
+    const timeout = setTimeout(() => reject(new Error('Alexa API timeout')), 15000);
+
+    const req = https.request(
+      {
+        hostname: ALEXA_HOST,
+        path: '/api/behaviors/preview',
+        method: 'POST',
+        headers: {
+          Cookie: cookie,
+          csrf: csrfMatch[1],
+          'Content-Type': 'application/json',
+          'Accept-Language': 'pt-BR',
+          Accept: 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+          Origin: `https://${ALEXA_HOST}`,
+          Referer: `https://${ALEXA_HOST}/spa/index.html`,
+        },
+      },
+      (res) => {
+        res.on('data', () => undefined);
+        res.on('end', () => {
+          clearTimeout(timeout);
+          if (res.statusCode === 401 || res.statusCode === 403) {
+            reject(new Error(`Cookie expired: POST /api/behaviors/preview returned ${res.statusCode}`));
+          } else {
+            resolve();
+          }
+        });
+      },
+    );
+
+    req.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+    req.write('{}');
+    req.end();
+  });
+}
+
+/**
  * Gets the customer ID from the Alexa bootstrap API.
  * Required to build sequence commands.
  */

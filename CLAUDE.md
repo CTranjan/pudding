@@ -45,12 +45,11 @@ Lambda triggered by EventBridge Scheduler → calls unofficial Alexa API → Ech
 src/
   lambda/
     announcement.ts       # Handler: receives AnnouncementEvent, calls Alexa API
-    cookie-refresh.ts     # Handler: refreshes cookie via stored refresh token, writes new cookie+registration to SSM
+    cookie-refresh.ts     # Handler: validates cookie via POST /api/behaviors/preview, SNS-alerts on 401/403
   lib/
-    alexa-client.ts       # getCustomerId, getDeviceType, sendSpeak, sendAnnouncement, sendAnnouncementWithAudio, sendRadio, sendStop, getNowPlaying
-    alexa-cookie-refresh.ts # refreshRegistration() — promise wrapper around alexa-cookie2.refreshAlexaCookie
-    ssm.ts                # getCookieString(), getDeviceSerial(), getRegistrationData(), putCookieString(), putRegistrationData()
-    types.ts              # AnnouncementEvent, CookieData, ALEXA_CONFIG, SSM_PATHS
+    alexa-client.ts       # validateCookiePost, getCustomerId, getDeviceType, sendSpeak, sendAnnouncement, sendAnnouncementWithAudio, sendRadio, sendStop, getNowPlaying
+    ssm.ts                # getCookieString(), getDeviceSerial()
+    types.ts              # AnnouncementEvent, ALEXA_CONFIG, SSM_PATHS
   stack/
     pudding-stack.ts      # CDK stack — all AWS resources
   config/
@@ -84,9 +83,8 @@ interface AnnouncementEvent {
 
 // SSM paths
 const SSM_PATHS = {
-  COOKIE: '/pudding/alexa-cookie-data',                // SecureString — raw cookie string (used by announcement Lambda)
-  DEVICE_SERIAL: '/pudding/device-serial',             // String
-  REGISTRATION: '/pudding/alexa-registration-data',    // SecureString — full alexa-cookie2 bundle incl. refreshToken (used by cookie-refresh Lambda)
+  COOKIE: '/pudding/alexa-cookie-data',       // SecureString
+  DEVICE_SERIAL: '/pudding/device-serial',     // String
 }
 ```
 
@@ -152,25 +150,32 @@ timezone: 'America/Sao_Paulo'
 
 ---
 
-## Cookie lifecycle (2026-04-13)
+## Cookie lifecycle (2026-04-14)
 
-`pudding-cookie-refresh` Lambda runs every 3 days. It reads `SSM_PATHS.REGISTRATION`,
-calls `alexa-cookie2.refreshAlexaCookie()` to exchange the stored refresh token for a
-fresh cookie, and writes the new cookie + rotated registration back to SSM. No human
-interaction needed — unless the refresh token itself is revoked (SNS alert then).
+`pudding-cookie-refresh` Lambda runs every 3 days. It POSTs to `/api/behaviors/preview`
+(the same CSRF-gated path announcements use) with an empty body — if the response is
+401/403, the cookie is stale and an SNS alert fires *before* the next announcement
+fails. A valid cookie returns 400 (bad payload, but auth passed) which the validator
+treats as success.
 
-**Bootstrap (one-time, needed after refresh token revocation)**:
+Why this matters: the prior validator used `GET /api/bootstrap`, which keeps returning
+200 even when the session is too stale for POSTs. That silent pass let the cookie rot
+until an announcement actually 401'd in prod (2026-04-13 incident).
+
+**Manual cookie refresh** (~every 7–14 days, triggered by SNS alert):
 ```
-# on laptop
-ssh -L 8443:localhost:8443 ubuntu@<ec2>
+# in your browser: log in to alexa.amazon.com.br
+# DevTools > Network > refresh > copy full Cookie header
 
-# on EC2
-cd /home/ubuntu/projects/pudding && pnpm setup
-
-# on laptop browser
-open https://127.0.0.1:8443/   # accept self-signed cert, log in, done
+cd /home/ubuntu/projects/pudding && pnpm run bootstrap
+# paste cookie when prompted, pick your Echo Dot, done
 ```
+
+**Why not automated refresh**: tried `alexa-cookie2`'s refresh-token flow
+(2026-04-14) — Amazon's anti-fraud blocks the OAuth device-registration from EC2
+IPs on Brazilian accounts. Manual paste from a residential-IP browser is more
+reliable. Don't retry the automated flow; repeat attempts trip account locks.
 
 ---
 
-## Last updated: 2026-04-13
+## Last updated: 2026-04-14
