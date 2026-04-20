@@ -150,7 +150,18 @@ timezone: 'America/Sao_Paulo'
 
 ---
 
-## Cookie lifecycle (2026-04-14)
+## SSM gotcha (2026-04-20)
+
+`/pudding/device-serial` is a `SecureString`. `getDeviceSerial()` in
+`src/lib/ssm.ts` MUST pass `WithDecryption: true` — without it, the Lambda
+reads raw KMS ciphertext and ships it to Alexa as the device serial,
+producing `"Device with serial AQICAHg... not found"` errors while the
+cookie validator still passes. The flag is a no-op for `String` parameters,
+so leave it on regardless.
+
+---
+
+## Cookie lifecycle (2026-04-14, health UI 2026-04-20)
 
 `pudding-cookie-refresh` Lambda runs every 3 days. It POSTs to `/api/behaviors/preview`
 (the same CSRF-gated path announcements use) with an empty body — if the response is
@@ -162,11 +173,17 @@ Why this matters: the prior validator used `GET /api/bootstrap`, which keeps ret
 200 even when the session is too stale for POSTs. That silent pass let the cookie rot
 until an announcement actually 401'd in prod (2026-04-13 incident).
 
-**Manual cookie refresh** (~every 7–14 days, triggered by SNS alert):
-```
-# in your browser: log in to alexa.amazon.com.br
-# DevTools > Network > refresh > copy full Cookie header
+**Manual cookie refresh** (~every 7–14 days, triggered by SNS alert or by the
+"Renew soon" / "Expired" badge on `c4i0apps.com/pudding`):
 
+Preferred — in-app card at https://c4i0apps.com/pudding (System Health):
+1. Click **Renew cookie** → opens Amazon link.
+2. DevTools → Network → copy full `Cookie:` header → paste → **Save & test**.
+3. The card validates via `POST /api/behaviors/preview`, writes SSM, and
+   auto-fires a test announcement. Echo speaks "Teste do Pudding."
+
+Fallback — terminal:
+```
 cd /home/ubuntu/projects/pudding && pnpm run bootstrap
 # paste cookie when prompted, pick your Echo Dot, done
 ```
@@ -178,4 +195,4 @@ reliable. Don't retry the automated flow; repeat attempts trip account locks.
 
 ---
 
-## Last updated: 2026-04-14
+## Last updated: 2026-04-20
