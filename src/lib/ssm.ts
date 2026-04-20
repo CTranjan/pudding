@@ -23,9 +23,13 @@ export async function getCookieString(): Promise<string> {
 }
 
 export async function getDeviceSerial(): Promise<string> {
+  // WithDecryption is safe for both String and SecureString — for plain String
+  // it's a no-op, but if the param ever gets stored as SecureString (as happened
+  // 2026-04-16) we'd otherwise read raw KMS ciphertext and pass it as a serial.
   const result = await ssmClient.send(
     new GetParameterCommand({
       Name: SSM_PATHS.deviceSerial,
+      WithDecryption: true,
     })
   );
 
