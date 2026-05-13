@@ -49,15 +49,32 @@ function buildStartNode(mainNode: OperationNode, volumeNode?: OperationNode, res
 }
 
 /**
- * Validates the cookie by POSTing to /api/behaviors/preview — the same
- * CSRF-gated endpoint announcements use. A stale session returns 401/403
- * even when GET /api/bootstrap still returns 200, so this is the reliable
- * way to detect expiry before the next real announcement fails.
+ * Validates the cookie by exercising BOTH halves of the auth surface the
+ * announcement Lambda relies on:
  *
- * Success: resolves on any non-auth response (2xx, 400, 5xx — Alexa accepted
- *          the CSRF). Failure: rejects only on 401/403.
+ *   1. POST /api/behaviors/preview — the CSRF-gated path real commands use.
+ *   2. GET  /api/bootstrap          — the unauth'd-GET path used to fetch
+ *                                     customerId before any command.
+ *
+ * Why both: a half-stale cookie (e.g. CSRF still recognized but session-token
+ * gone) can pass (1) while (2) still 401s — making announcements silently
+ * break after a "successful" cookie paste. Asserting customerId parses
+ * mirrors what the announcement Lambda does on every invocation.
  */
-export function validateCookiePost(cookie: string): Promise<void> {
+export async function validateCookiePost(cookie: string): Promise<void> {
+  await checkBehaviorsPreviewPost(cookie);
+  try {
+    await getCustomerId(cookie);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `Cookie incomplete: POST /api/behaviors/preview passed but GET /api/bootstrap failed (${msg}). ` +
+        'Re-copy the full Cookie header from alexa.amazon.com.br while logged in.'
+    );
+  }
+}
+
+function checkBehaviorsPreviewPost(cookie: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const csrfMatch = cookie.match(/csrf=([^;]+)/);
     if (!csrfMatch) {
