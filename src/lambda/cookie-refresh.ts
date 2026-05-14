@@ -1,6 +1,6 @@
 import { SNSClient, PublishCommand } from '@aws-sdk/client-sns';
-import { getCookieString } from '../lib/ssm';
-import { validateCookiePost } from '../lib/alexa-client';
+import { getCookieWithMeta } from '../lib/ssm';
+import { validateCookiePost, summarizeCookie } from '../lib/alexa-client';
 
 const snsClient = new SNSClient({});
 const SNS_TOPIC_ARN = process.env.SNS_TOPIC_ARN!;
@@ -9,14 +9,25 @@ export const handler = async (): Promise<void> => {
   console.log(JSON.stringify({ action: 'cookie_refresh_start' }));
 
   let cookie: string;
+  let cookieSavedAt: Date | undefined;
   try {
-    cookie = await getCookieString();
+    const meta = await getCookieWithMeta();
+    cookie = meta.value;
+    cookieSavedAt = meta.lastModified;
   } catch (error) {
     const msg = `Failed to read cookie from SSM: ${error instanceof Error ? error.message : error}`;
     console.error(JSON.stringify({ action: 'cookie_refresh_ssm_error', error: msg }));
     await publishAlert(msg);
     throw error;
   }
+
+  const cookieAgeMs = cookieSavedAt ? Date.now() - cookieSavedAt.getTime() : null;
+  console.log(JSON.stringify({
+    action: 'cookie_refresh_probe',
+    cookieAgeHours: cookieAgeMs != null ? +(cookieAgeMs / 3_600_000).toFixed(2) : null,
+    cookieSavedAt: cookieSavedAt?.toISOString() ?? null,
+    cookie: summarizeCookie(cookie),
+  }));
 
   try {
     await validateCookiePost(cookie);

@@ -7,6 +7,17 @@ import { SSM_PATHS } from './types';
 const ssmClient = new SSMClient({});
 
 export async function getCookieString(): Promise<string> {
+  return (await getCookieWithMeta()).value;
+}
+
+/**
+ * Reads the cookie AND its SSM LastModifiedDate, so the caller can log
+ * cookie age on failures. Useful for diagnosing how long a paste survives.
+ */
+export async function getCookieWithMeta(): Promise<{
+  value: string;
+  lastModified: Date | undefined;
+}> {
   const result = await ssmClient.send(
     new GetParameterCommand({
       Name: SSM_PATHS.cookieData,
@@ -19,7 +30,7 @@ export async function getCookieString(): Promise<string> {
     throw new Error(`SSM parameter ${SSM_PATHS.cookieData} is empty or not found`);
   }
 
-  return value;
+  return { value, lastModified: result.Parameter?.LastModifiedDate };
 }
 
 export async function getDeviceSerial(): Promise<string> {

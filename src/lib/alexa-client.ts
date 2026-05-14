@@ -1,6 +1,45 @@
 import * as https from 'https';
+import type { IncomingHttpHeaders } from 'http';
 
 const ALEXA_HOST = 'alexa.amazon.com.br';
+
+/**
+ * Headers worth capturing when Alexa returns 4xx. set-cookie tells us if
+ * Amazon is rotating session bits; x-amz-rid / x-amzn-requestid let us
+ * correlate with Amazon's side; www-authenticate sometimes carries a
+ * machine-readable reason for the rejection.
+ */
+const DIAGNOSTIC_HEADERS = [
+  'set-cookie',
+  'x-amz-rid',
+  'x-amzn-requestid',
+  'x-amzn-trace-id',
+  'www-authenticate',
+  'location',
+  'content-type',
+  'date',
+] as const;
+
+function pickHeaders(h: IncomingHttpHeaders): Record<string, string | string[]> {
+  const out: Record<string, string | string[]> = {};
+  for (const k of DIAGNOSTIC_HEADERS) {
+    const v = h[k];
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Cookie names (no values — for safety) + total length. Use when a 4xx
+ * shows up so we can see which session cookies Amazon refused.
+ */
+export function summarizeCookie(cookie: string): { length: number; names: string[] } {
+  const names = cookie
+    .split(';')
+    .map((p) => p.trim().split('=')[0])
+    .filter((n) => n.length > 0);
+  return { length: cookie.length, names };
+}
 
 /**
  * Strips diacritics from text so Alexa TTS pronounces Portuguese correctly.
@@ -100,9 +139,23 @@ function checkBehaviorsPreviewPost(cookie: string): Promise<void> {
         },
       },
       (res) => {
-        res.on('data', () => undefined);
+        let body = '';
+        res.on('data', (chunk) => {
+          if (body.length < 1000) body += chunk.toString();
+        });
         res.on('end', () => {
           clearTimeout(timeout);
+          if (res.statusCode && res.statusCode >= 400) {
+            console.error(JSON.stringify({
+              action: 'alexa_4xx',
+              method: 'POST',
+              path: '/api/behaviors/preview',
+              status: res.statusCode,
+              headers: pickHeaders(res.headers),
+              bodyPreview: body.substring(0, 500),
+              cookie: summarizeCookie(cookie),
+            }));
+          }
           if (res.statusCode === 401 || res.statusCode === 403) {
             reject(new Error(`Cookie expired: POST /api/behaviors/preview returned ${res.statusCode}`));
           } else {
@@ -453,6 +506,15 @@ function alexaRequest(
       res.on('end', () => {
         clearTimeout(timeout);
         if (res.statusCode && res.statusCode >= 400) {
+          console.error(JSON.stringify({
+            action: 'alexa_4xx',
+            method,
+            path,
+            status: res.statusCode,
+            headers: pickHeaders(res.headers),
+            bodyPreview: data.substring(0, 500),
+            cookie: summarizeCookie(cookie),
+          }));
           reject(new Error(`Alexa API ${res.statusCode}: ${data.substring(0, 200)}`));
           return;
         }

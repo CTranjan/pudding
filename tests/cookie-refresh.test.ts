@@ -21,6 +21,7 @@ vi.mock('@aws-sdk/client-sns', () => ({
 
 vi.mock('../src/lib/alexa-client', () => ({
   validateCookiePost: mockValidate,
+  summarizeCookie: (c: string) => ({ length: c.length, names: c.split(';').map((s) => s.trim().split('=')[0]) }),
 }));
 
 process.env.SNS_TOPIC_ARN = 'arn:aws:sns:us-east-2:123456789:pudding-alerts';

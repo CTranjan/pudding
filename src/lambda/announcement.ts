@@ -1,18 +1,23 @@
 import { AnnouncementEvent } from '../lib/types';
-import { getCookieString, getDeviceSerial } from '../lib/ssm';
-import { getCustomerId, getDeviceType, sendSpeak, sendAnnouncement, sendAnnouncementWithAudio, sendRadio, sendStop, getNowPlaying } from '../lib/alexa-client';
+import { getCookieWithMeta, getDeviceSerial } from '../lib/ssm';
+import { getCustomerId, getDeviceType, sendSpeak, sendAnnouncement, sendAnnouncementWithAudio, sendRadio, sendStop, getNowPlaying, summarizeCookie } from '../lib/alexa-client';
 
 export const handler = async (event: AnnouncementEvent): Promise<void | Record<string, unknown>> => {
   const { message, commandType, reminderId, audioUrl, volume, restoreVolume, introText } = event;
+
+  const { value: cookie, lastModified: cookieSavedAt } = await getCookieWithMeta();
+  const cookieAgeMs = cookieSavedAt ? Date.now() - cookieSavedAt.getTime() : null;
 
   console.log(JSON.stringify({
     action: 'announcement_start',
     reminderId,
     commandType,
     messageLength: message?.length ?? 0,
+    cookieAgeHours: cookieAgeMs != null ? +(cookieAgeMs / 3_600_000).toFixed(2) : null,
+    cookieSavedAt: cookieSavedAt?.toISOString() ?? null,
+    cookie: summarizeCookie(cookie),
   }));
 
-  const cookie = await getCookieString();
   const serialNumber = await getDeviceSerial();
 
   // Now-playing returns data instead of sending a command

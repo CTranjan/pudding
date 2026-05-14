@@ -29,6 +29,7 @@ vi.mock('../src/lib/alexa-client', () => ({
   sendAnnouncementWithAudio: mockSendAnnouncementWithAudio,
   sendRadio: mockSendRadio,
   sendStop: mockSendStop,
+  summarizeCookie: (c: string) => ({ length: c.length, names: c.split(';').map((s) => s.trim().split('=')[0]) }),
 }));
 
 import { handler } from '../src/lambda/announcement';
