@@ -9,8 +9,8 @@ export class PuddingStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // Keep the id 'AudioBucket': a new id renames the logical IDs, so CloudFormation
-    // would delete the bucket policy and the Echo would lose anonymous read.
+    // Keep the id 'AudioBucket': tests pin the deployed logical IDs, and a new id makes
+    // CloudFormation create a second bucket with the same name, so the update rolls back.
     const audioBucket = new s3.Bucket(this, 'AudioBucket', {
       bucketName: `pudding-audio-${this.account}`,
       blockPublicAccess: new s3.BlockPublicAccess({

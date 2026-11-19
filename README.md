@@ -31,7 +31,8 @@ Deploy the skill in the Alexa developer console: Pudding > Code > replace `index
 
 ## Never
 
-- `cdk destroy`, or renaming the `AudioBucket` construct. The bucket survives, but its read policy would be deleted and the Echo would go silent.
+- `cdk destroy`: the bucket and its read policy are retained, but they leave the stack and CDK no longer manages them.
+- Renaming the `AudioBucket` construct: the update tries to create a second bucket with the same name and rolls back.
 
 ## History
 

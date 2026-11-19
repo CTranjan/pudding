@@ -9,8 +9,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "cdk": "cdk",
-    "synth": "cdk synth",
-    "deploy": "cdk deploy"
+    "synth": "cdk synth"
   },
   "dependencies": {
     "aws-cdk-lib": "^2.170.0",
