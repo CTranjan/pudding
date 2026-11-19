@@ -5,15 +5,15 @@ The S3 bucket and Alexa skill that play recorded family messages on an Echo Dot 
 ## How it works
 
 - Native Alexa routines on the Echo open the skill "Pudding" with the phrase "abrir recado do pudim".
-- The skill (`skill/index.js`, Alexa-hosted) picks the message by Sao Paulo hour: before 12h bom dia, 12h to 17h boa tarde, 18h on boa noite.
+- The skill (`skill/index.js`, Alexa-hosted) picks one of three slots by Sao Paulo hour: bom dia before 12h, boa tarde from 12h, boa noite from 18h.
 - It says "Mensagem de Caio" and streams `audio/recados/<slot>.mp3` from the bucket `pudding-audio-051162627683`.
-- Re-recording a slot overwrites its file, so the skill needs no change.
+- A new recording overwrites its slot file, so the skill needs no change. The portal recorder on c4i0apps.com will upload to these keys; until it does, upload with `aws s3 cp <file>.mp3 s3://pudding-audio-051162627683/audio/recados/<slot>.mp3 --profile personal`.
 
 ## Layout
 
 | Path | What it is |
 |---|---|
-| `src/stack/pudding-stack.ts` | CDK stack: the bucket, anonymous read on `audio/*`, CORS for uploads from `https://c4i0apps.com` |
+| `src/stack/pudding-stack.ts` | CDK stack: the bucket, public read on `audio/*`, CORS for uploads from `https://c4i0apps.com` |
 | `tests/stack.test.ts` | Guards the deployed logical IDs, the retain rules, public read and CORS |
 | `skill/index.js` | Source of the Alexa-hosted skill; keep it equal to what the developer console runs |
 
@@ -31,7 +31,7 @@ Deploy the skill in the Alexa developer console: Pudding > Code > replace `index
 
 ## Never
 
-- `cdk destroy`: the bucket and its read policy are retained, but they leave the stack and CDK no longer manages them.
+- `cdk destroy`: the bucket and its public-read policy are retained, but they leave the stack and CDK no longer manages them.
 - Renaming the `AudioBucket` construct: the update tries to create a second bucket with the same name and rolls back.
 
 ## History

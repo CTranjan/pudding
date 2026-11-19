@@ -29,6 +29,6 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*", "bin/**/*", "scripts/**/*", "tests/**/*"],
+  "include": ["src/**/*", "bin/**/*", "tests/**/*"],
   "exclude": ["node_modules", "cdk.out", "dist"]
 }
