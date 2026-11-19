@@ -1,134 +1,39 @@
 # Pudding
 
-Scheduled voice announcements for Amazon Echo Dot — medication and daily routine reminders for a family member with dementia.
+The S3 bucket and Alexa skill that play recorded family messages on an Echo Dot in Brazil, three times a day.
 
-Uses AWS Lambda + EventBridge Scheduler to send voice commands to an Echo Dot via the unofficial `alexa-remote2` library.
+## How it works
 
-## Prerequisites
+- Native Alexa routines on the Echo open the skill "Pudding" with the phrase "abrir recado do pudim".
+- The skill (`skill/index.js`, Alexa-hosted) picks one of three slots by Sao Paulo hour: bom dia before 12h, boa tarde from 12h, boa noite from 18h.
+- It says "Mensagem de Caio" and streams `audio/recados/<slot>.mp3` from the bucket `pudding-audio-051162627683`.
+- A new recording overwrites its slot file, so the skill needs no change. The portal recorder on c4i0apps.com will upload to these keys; until it does, upload with `aws s3 cp <file>.mp3 s3://pudding-audio-051162627683/audio/recados/<slot>.mp3 --profile personal`.
 
-- Node.js 20+
-- pnpm
-- AWS CLI configured with credentials (`aws configure`)
-- AWS CDK bootstrapped in your account/region:
-  ```bash
-  pnpm cdk bootstrap aws://ACCOUNT_ID/us-east-2
-  ```
-- An Amazon Echo Dot registered to an amazon.com.br account
+## Layout
 
-## Quick Start
+| Path | What it is |
+|---|---|
+| `src/stack/pudding-stack.ts` | CDK stack: the bucket, public read on `audio/*`, CORS for uploads from `https://c4i0apps.com` |
+| `tests/stack.test.ts` | Guards the deployed logical IDs, the retain rules, public read and CORS |
+| `skill/index.js` | Source of the Alexa-hosted skill; keep it equal to what the developer console runs |
 
-### 1. Install dependencies
+## Commands
 
 ```bash
 pnpm install
+pnpm test                                  # stack guard
+pnpm synth                                 # writes cdk.out/PuddingStack.template.json
+pnpm cdk diff --profile personal           # compare with the deployed stack
+pnpm cdk deploy --profile personal
 ```
 
-### 2. Generate the Alexa session cookie
+Deploy the skill in the Alexa developer console: Pudding > Code > replace `index.js` > Save > Deploy, then type "abrir recado do pudim" in the Test tab.
 
-Run the setup script on a machine with a web browser:
+## Never
 
-```bash
-pnpm setup
-```
+- `cdk destroy`: the bucket and its public-read policy are retained, but they leave the stack and CDK no longer manages them.
+- Renaming the `AudioBucket` construct: the update tries to create a second bucket with the same name and rolls back.
 
-This will:
-1. Start a local proxy on `http://localhost:3001`
-2. Open your browser — log into your amazon.com.br account
-3. List your Echo devices — select the target Echo Dot
-4. Save the session cookie and device serial to AWS SSM Parameter Store
+## History
 
-### 3. Deploy the CDK stack
-
-```bash
-pnpm deploy -c alertEmail=your-email@example.com
-```
-
-### 4. Confirm SNS email subscription
-
-AWS sends a confirmation email to the alert address. Click the link to subscribe.
-
-### 5. Test manually
-
-```bash
-aws lambda invoke \
-  --function-name pudding-announcement \
-  --payload '{"message":"Teste!","commandType":"speak","reminderId":"test"}' \
-  --cli-binary-format raw-in-base64-out \
-  out.json
-```
-
-You should hear the Echo Dot speak "Teste!".
-
-## How Reminders Work
-
-Reminders are defined in `src/config/reminders.ts`. Each reminder has:
-- `id` — unique identifier
-- `schedule` — EventBridge cron expression
-- `message` — text to be spoken
-- `commandType` — `'speak'` (target device only) or `'announcement'` (can show on displays)
-
-All schedules use the `America/Sao_Paulo` timezone.
-
-### Default Reminders
-
-| Time | ID | Message |
-|------|----|---------|
-| 8:00 AM | morning-medication | Bom dia! Está na hora de tomar o remédio da manhã. |
-| 12:00 PM | lunch | Hora do almoço! |
-| 3:00 PM | afternoon-medication | Está na hora do remédio da tarde. |
-| 6:00 PM | dinner | Hora do jantar! |
-| 8:00 PM | night-medication | Hora do remédio da noite. Boa noite! |
-
-### Adding or Editing Reminders
-
-1. Edit `src/config/reminders.ts`
-2. Redeploy: `pnpm deploy -c alertEmail=your-email@example.com`
-
-## Cookie Management
-
-The Amazon session cookie expires approximately every 14 days. Pudding handles this automatically:
-
-- **Auto-refresh Lambda** runs every 3 days and refreshes the cookie
-- **If refresh fails**, you receive an email alert via SNS
-- **To fix a failed refresh**, re-run the setup script: `pnpm setup`
-
-## Architecture
-
-```
-EventBridge Scheduler (5 cron rules) → Announcement Lambda → Echo Dot
-EventBridge Scheduler (every 3 days) → Cookie Refresh Lambda → SSM
-                                                              ↓ (on failure)
-                                                             SNS → Email Alert
-```
-
-## Running Tests
-
-```bash
-pnpm test          # single run
-pnpm test:watch    # watch mode
-```
-
-## Troubleshooting
-
-### "Cookie expired" errors
-Re-run `pnpm setup` to generate a fresh cookie.
-
-### CAPTCHA or 2FA during setup
-The proxy-based login shows the real Amazon login page. Complete any CAPTCHA or 2FA challenges in the browser.
-
-### Echo Dot not found
-Ensure the device is online and registered to the same Amazon account used during setup.
-
-### Lambda timeout
-If the Lambda times out, the Echo Dot may be offline or unreachable. Check CloudWatch logs for details.
-
-## Tech Stack
-
-- **Runtime**: Node.js 20 (Lambda)
-- **IaC**: AWS CDK (TypeScript)
-- **Scheduling**: EventBridge Scheduler
-- **Secrets**: AWS SSM Parameter Store (SecureString)
-- **Alexa**: alexa-remote2 + alexa-cookie2
-- **Tests**: Vitest
-- **Region**: us-east-2
-- **Cost**: ~$0.10/month (essentially free tier)
+Until November 2026 this repo drove the Echo from Lambda through Amazon's unofficial cookie API (`alexa-remote2`). Amazon sessions expired within days and the token refresh locked the account, so routines plus this skill replaced it. The old code is in git history.
